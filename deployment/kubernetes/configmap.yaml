@@ -1,0 +1,308 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: molecule-platform-config
+  namespace: molecule-platform
+  labels:
+    app.kubernetes.io/name: molecule-platform
+    app.kubernetes.io/part-of: molecule-data-platform
+    app.kubernetes.io/managed-by: kubectl
+    environment: production
+    tier: application
+data:
+  # Backend Core Configuration
+  ENVIRONMENT: "production"
+  DEBUG: "false"
+  PROJECT_NAME: "Molecular Data Management and CRO Integration Platform"
+  API_V1_STR: "/api/v1"
+  VERSION: "1.0.0"
+  LOG_LEVEL: "INFO"
+  
+  # Database Configuration
+  DATABASE_MAX_CONNECTIONS: "100"
+  DATABASE_POOL_SIZE: "20"
+  DATABASE_POOL_OVERFLOW: "10"
+  REDIS_URL: "redis://redis-master.molecule-platform.svc.cluster.local:6379/0"
+  
+  # Authentication Configuration
+  ACCESS_TOKEN_EXPIRE_MINUTES: "15"
+  REFRESH_TOKEN_EXPIRE_DAYS: "7"
+  
+  # CORS Configuration
+  BACKEND_CORS_ORIGINS: '["https://app.moleculeflow.com", "https://staging.moleculeflow.com", "http://localhost:3000"]'
+  
+  # Email Configuration
+  SMTP_HOST: "smtp.sendgrid.net"
+  SMTP_PORT: "587"
+  EMAILS_FROM_EMAIL: "no-reply@moleculeflow.com"
+  EMAILS_FROM_NAME: "MoleculeFlow Platform"
+  
+  # API Configuration
+  PAGINATION_DEFAULT_PAGE: "1"
+  PAGINATION_DEFAULT_PAGE_SIZE: "50"
+  PAGINATION_MAX_PAGE_SIZE: "500"
+  
+  # Molecule Processing Configuration
+  MOLECULE_BATCH_SIZE: "1000"
+  AI_PREDICTION_BATCH_SIZE: "100"
+  CSV_MAX_FILE_SIZE_MB: "100"
+  CSV_MAX_ROWS: "500000"
+  
+  # AWS Configuration
+  AWS_REGION: "us-east-1"
+  
+  # Integration Endpoints
+  AI_ENGINE_API_URL: "https://ai-engine-api.moleculeflow.com/v1"
+  DOCUSIGN_BASE_URL: "https://demo.docusign.net/restapi"
+  
+  # Frontend Configuration
+  VITE_APP_TITLE: "MoleculeFlow"
+  VITE_API_BASE_URL: "https://api.moleculeflow.com"
+  VITE_AUTH_ENABLED: "true"
+  VITE_MOCK_API: "false"
+  VITE_ENABLE_LOGGING: "true"
+  VITE_LOG_LEVEL: "info"
+  VITE_DOCUSIGN_INTEGRATION_URL: "https://api.moleculeflow.com/integrations/docusign"
+  VITE_AI_PREDICTION_ENABLED: "true"
+  VITE_WEBSOCKET_URL: "wss://api.moleculeflow.com/ws"
+  VITE_MAX_UPLOAD_SIZE: "100"
+  VITE_MAX_CSV_ROWS: "500000"
+  VITE_DEFAULT_PAGINATION_LIMIT: "50"
+  VITE_DEFAULT_THEME: "light"
+  VITE_TOAST_DURATION: "5000"
+  VITE_DASHBOARD_REFRESH_INTERVAL: "300000"
+  
+  # Feature Flags
+  VITE_ENABLE_3D_MOLECULE_VIEWER: "true"
+  VITE_ENABLE_REAL_TIME_NOTIFICATIONS: "true"
+  VITE_ENABLE_MOLECULE_COMPARISON: "true"
+  VITE_ENABLE_BATCH_SUBMISSIONS: "true"
+  
+  # Nginx Configuration for Frontend
+  nginx.conf: |
+    user nginx;
+    worker_processes auto;
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+
+    events {
+      worker_connections 4096;
+    }
+
+    http {
+      include /etc/nginx/mime.types;
+      default_type application/octet-stream;
+      
+      log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+      
+      access_log /var/log/nginx/access.log main;
+      
+      sendfile on;
+      tcp_nopush on;
+      tcp_nodelay on;
+      keepalive_timeout 65;
+      types_hash_max_size 2048;
+      server_tokens off;
+      
+      # Compression
+      gzip on;
+      gzip_disable "msie6";
+      gzip_vary on;
+      gzip_proxied any;
+      gzip_comp_level 6;
+      gzip_buffers 16 8k;
+      gzip_http_version 1.1;
+      gzip_min_length 256;
+      gzip_types
+        application/atom+xml
+        application/javascript
+        application/json
+        application/ld+json
+        application/manifest+json
+        application/rss+xml
+        application/vnd.geo+json
+        application/vnd.ms-fontobject
+        application/x-font-ttf
+        application/x-web-app-manifest+json
+        application/xhtml+xml
+        application/xml
+        font/opentype
+        image/bmp
+        image/svg+xml
+        image/x-icon
+        text/cache-manifest
+        text/css
+        text/plain
+        text/vcard
+        text/vnd.rim.location.xloc
+        text/vtt
+        text/x-component
+        text/x-cross-domain-policy;
+      
+      server {
+        listen 80;
+        server_name localhost;
+        root /usr/share/nginx/html;
+        index index.html;
+        
+        # Security headers
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://api.moleculeflow.com wss://api.moleculeflow.com;" always;
+        
+        # Cache control for static assets
+        location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg)$ {
+          expires 7d;
+          add_header Cache-Control "public, max-age=604800, immutable";
+        }
+        
+        # Health check endpoint
+        location /health {
+          access_log off;
+          return 200 "healthy\n";
+        }
+        
+        # API proxy
+        location /api/ {
+          proxy_pass https://api.moleculeflow.com;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection 'upgrade';
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_cache_bypass $http_upgrade;
+        }
+        
+        # WebSocket proxy
+        location /ws/ {
+          proxy_pass https://api.moleculeflow.com;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_read_timeout 86400;
+        }
+        
+        # SPA fallback
+        location / {
+          try_files $uri $uri/ /index.html;
+        }
+      }
+    }
+
+  # Backend YAML Configuration
+  backend-config.yaml: |
+    logging:
+      level: INFO
+      format: json
+      handlers:
+        - console
+        - file
+      file_path: /var/log/app/application.log
+      rotation: daily
+      retention: 30 days
+    
+    cors:
+      allow_origins:
+        - https://app.moleculeflow.com
+        - https://staging.moleculeflow.com
+        - http://localhost:3000
+      allow_methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+        - PATCH
+      allow_headers:
+        - Content-Type
+        - Authorization
+        - X-Requested-With
+      allow_credentials: true
+      max_age: 86400
+    
+    pagination:
+      default_page: 1
+      default_page_size: 50
+      max_page_size: 500
+    
+    molecule_processing:
+      batch_size: 1000
+      csv_max_rows: 500000
+      csv_max_file_size_mb: 100
+      allowed_extensions:
+        - .csv
+        - .sdf
+        - .mol
+      validation:
+        validate_smiles: true
+        validate_inchi: true
+        max_molecule_size: 200
+        rejected_elements:
+          - Ac
+          - Th
+          - Pa
+          - U
+    
+    ai_prediction:
+      batch_size: 100
+      timeout_seconds: 300
+      retry_attempts: 3
+      retry_delay_seconds: 30
+      backoff_factor: 2.0
+      properties:
+        - logP
+        - solubility
+        - permeability
+        - metabolic_stability
+        - hERG_inhibition
+        - Ames_mutagenicity
+    
+    cro_integration:
+      submission_format: json
+      document_templates:
+        - nda_template
+        - mta_template
+        - service_agreement_template
+      result_formats:
+        - csv
+        - excel
+        - json
+      status_update_interval_minutes: 60
+    
+    api_documentation:
+      docs_url: /docs
+      redoc_url: /redoc
+      openapi_url: /openapi.json
+      title: "Molecular Data Management and CRO Integration API"
+      description: "API for managing molecular data and CRO integrations"
+      version: "1.0.0"
+      contact:
+        name: "API Support"
+        email: "api-support@moleculeflow.com"
+        url: "https://docs.moleculeflow.com"
+      license:
+        name: "Proprietary"
+      tags:
+        - name: molecules
+          description: Operations related to molecule management
+        - name: libraries
+          description: Operations related to molecule libraries
+        - name: predictions
+          description: Operations related to AI property predictions
+        - name: submissions
+          description: Operations related to CRO submissions
+        - name: results
+          description: Operations related to experimental results
+        - name: users
+          description: Operations related to user management
+        - name: documents
+          description: Operations related to document management
