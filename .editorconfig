@@ -1,0 +1,31 @@
+root = true
+
+# Default settings for all files
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Settings for web-related files
+[*.{json,yml,yaml,html,css}]
+indent_size = 2
+
+# Settings for JavaScript/TypeScript files
+[*.{js,jsx,ts,tsx}]
+indent_size = 2
+
+# Settings for Python files
+[*.py]
+indent_size = 4
+max_line_length = 88
+
+# Settings for Markdown files
+[*.md]
+trim_trailing_whitespace = false
+
+# Settings for Makefiles
+[Makefile]
+indent_style = tab
