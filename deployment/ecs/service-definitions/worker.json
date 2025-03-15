@@ -1,0 +1,90 @@
+{
+  "serviceName": "moleculeflow-worker",
+  "cluster": "${aws_ecs_cluster.main.id}",
+  "taskDefinition": "${aws_ecs_task_definition.worker.arn}",
+  "desiredCount": 2,
+  "launchType": "FARGATE",
+  "platformVersion": "LATEST",
+  "deploymentController": {
+    "type": "ECS"
+  },
+  "deploymentConfiguration": {
+    "deploymentCircuitBreaker": {
+      "enable": true,
+      "rollback": true
+    },
+    "maximumPercent": 200,
+    "minimumHealthyPercent": 100
+  },
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": [
+        "${aws_subnet.private_a.id}",
+        "${aws_subnet.private_b.id}",
+        "${aws_subnet.private_c.id}"
+      ],
+      "securityGroups": [
+        "${aws_security_group.worker_service.id}"
+      ],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "healthCheckGracePeriodSeconds": 120,
+  "schedulingStrategy": "REPLICA",
+  "enableECSManagedTags": true,
+  "propagateTags": "SERVICE",
+  "enableExecuteCommand": true,
+  "serviceRegistries": [
+    {
+      "registryArn": "${aws_service_discovery_service.worker.arn}",
+      "port": 8000
+    }
+  ],
+  "tags": [
+    {
+      "key": "Name",
+      "value": "moleculeflow-worker"
+    },
+    {
+      "key": "Environment",
+      "value": "${var.environment}"
+    },
+    {
+      "key": "Project",
+      "value": "MoleculeFlow"
+    },
+    {
+      "key": "Service",
+      "value": "worker-service"
+    }
+  ],
+  "capacityProviderStrategy": [
+    {
+      "capacityProvider": "FARGATE",
+      "weight": 1,
+      "base": 1
+    },
+    {
+      "capacityProvider": "FARGATE_SPOT",
+      "weight": 2,
+      "base": 0
+    }
+  ],
+  "autoScalingConfiguration": {
+    "minCapacity": 2,
+    "maxCapacity": 50,
+    "scaleOutCooldown": 300,
+    "scaleInCooldown": 300,
+    "queueDepthScaling": {
+      "targetValue": 100,
+      "scaleInValue": 10,
+      "scaleOutAdjustment": 2,
+      "scaleInAdjustment": -1
+    },
+    "cpuUtilization": {
+      "targetValue": 70,
+      "scaleOutThreshold": 75,
+      "scaleInThreshold": 30
+    }
+  }
+}
