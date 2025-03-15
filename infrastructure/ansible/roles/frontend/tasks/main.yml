@@ -1,0 +1,312 @@
+---
+# Ansible tasks for configuring and deploying the frontend services of the
+# Molecular Data Management and CRO Integration Platform.
+# This file defines tasks for setting up the frontend environment, Nginx configuration,
+# SSL setup, frontend service deployment, and security configuration.
+
+# Include common tasks
+- name: Include common tasks
+  include_role:
+    name: common
+  tags:
+    - common
+    - setup
+
+# Install frontend dependencies
+- name: Install frontend dependencies
+  block:
+    - name: Install Nginx
+      package:
+        name: ['nginx']
+        state: present
+    
+    - name: Install SSL tools
+      package:
+        name: ['certbot', 'python3-certbot-nginx']
+        state: present
+      when: use_ssl | default(true)
+  tags:
+    - frontend
+    - dependencies
+
+# Configure frontend environment
+- name: Configure frontend environment
+  block:
+    - name: Create frontend directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: molecule-app
+        group: molecule-app
+        mode: '0755'
+      loop:
+        - "{{ app_base_dir }}/frontend"
+        - "{{ app_base_dir }}/frontend/config"
+        - "{{ app_base_dir }}/frontend/logs"
+        - "{{ app_base_dir }}/frontend/nginx"
+    
+    - name: Generate frontend environment configuration
+      template:
+        src: templates/frontend.env.j2
+        dest: "{{ app_base_dir }}/frontend/config/frontend.env"
+        owner: molecule-app
+        group: molecule-app
+        mode: '0644'
+    
+    - name: Generate runtime configuration
+      template:
+        src: templates/config.js.j2
+        dest: "{{ app_base_dir }}/frontend/config/config.js"
+        owner: molecule-app
+        group: molecule-app
+        mode: '0644'
+  tags:
+    - frontend
+    - config
+
+# Configure Nginx
+- name: Configure Nginx
+  block:
+    - name: Create Nginx configuration directory
+      file:
+        path: /etc/nginx/conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+    
+    - name: Configure Nginx main settings
+      template:
+        src: templates/nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload nginx
+    
+    - name: Configure frontend virtual host
+      template:
+        src: templates/frontend-vhost.conf.j2
+        dest: /etc/nginx/conf.d/frontend.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload nginx
+    
+    - name: Configure API proxy
+      template:
+        src: templates/api-proxy.conf.j2
+        dest: /etc/nginx/conf.d/api-proxy.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload nginx
+    
+    - name: Configure Nginx security settings
+      template:
+        src: templates/security.conf.j2
+        dest: /etc/nginx/conf.d/security.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload nginx
+    
+    - name: Ensure Nginx service is running
+      service:
+        name: nginx
+        state: started
+        enabled: true
+  tags:
+    - frontend
+    - nginx
+
+# Configure SSL
+- name: Configure SSL
+  block:
+    - name: Check if SSL certificate exists
+      stat:
+        path: "/etc/letsencrypt/live/{{ frontend_domain }}/fullchain.pem"
+      register: ssl_cert_exists
+      when: use_ssl | default(true) and frontend_domain is defined
+    
+    - name: "Generate SSL certificate with Let's Encrypt"
+      command: >
+        certbot --nginx -d {{ frontend_domain }} --non-interactive --agree-tos --email {{ admin_email }} --redirect
+      when: use_ssl | default(true) and frontend_domain is defined and not ssl_cert_exists.stat.exists | default(false)
+    
+    - name: Generate self-signed certificate for development
+      command: >
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/private/nginx-selfsigned.key -out /etc/ssl/certs/nginx-selfsigned.crt -subj '/CN={{ frontend_domain | default(ansible_fqdn) }}'
+      when: use_ssl | default(true) and (frontend_domain is not defined or use_self_signed | default(false))
+    
+    - name: Configure SSL renewal cron job
+      cron:
+        name: "Certbot renewal"
+        job: "certbot renew --quiet --no-self-upgrade"
+        hour: "3"
+        minute: "30"
+        weekday: "1"
+      when: use_ssl | default(true) and frontend_domain is defined
+  tags:
+    - frontend
+    - ssl
+
+# Deploy frontend service
+- name: Deploy frontend service
+  block:
+    - name: Pull frontend Docker image
+      community.docker.docker_image:
+        name: "{{ ecr_registry }}/{{ ecr_repository_frontend }}:{{ image_tag | default('latest') }}"
+        source: pull
+        force_source: true
+    
+    - name: Deploy frontend container
+      community.docker.docker_container:
+        name: frontend
+        image: "{{ ecr_registry }}/{{ ecr_repository_frontend }}:{{ image_tag | default('latest') }}"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "{{ frontend_internal_port }}:80"
+        env_file: "{{ app_base_dir }}/frontend/config/frontend.env"
+        volumes:
+          - "{{ app_base_dir }}/frontend/config:/app/config:ro"
+          - "{{ app_base_dir }}/frontend/logs:/app/logs"
+        networks:
+          - molecule-network
+        healthcheck:
+          test: ["CMD", "wget", "-q", "-O", "-", "http://localhost/health", "||", "exit", "1"]
+          interval: 30s
+          timeout: 10s
+          retries: 3
+        cpu_shares: 1024
+        memory: "512m"
+    
+    - name: Wait for frontend health check
+      uri:
+        url: "http://localhost:{{ frontend_internal_port }}/health"
+        status_code: 200
+      register: health_check
+      retries: 10
+      delay: 5
+      until: health_check.status == 200
+    
+    - name: Update Nginx configuration for frontend
+      template:
+        src: templates/nginx-frontend-proxy.conf.j2
+        dest: /etc/nginx/conf.d/frontend-proxy.conf
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        frontend_port: "{{ frontend_internal_port }}"
+      notify: Reload nginx
+      when: health_check.status == 200
+  tags:
+    - frontend
+    - deploy
+
+# Configure frontend security
+- name: Configure frontend security
+  block:
+    - name: Configure Content Security Policy
+      template:
+        src: templates/csp-headers.conf.j2
+        dest: /etc/nginx/conf.d/csp-headers.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload nginx
+    
+    - name: Configure CORS headers
+      template:
+        src: templates/cors-headers.conf.j2
+        dest: /etc/nginx/conf.d/cors-headers.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload nginx
+    
+    - name: Configure HTTP security headers
+      template:
+        src: templates/security-headers.conf.j2
+        dest: /etc/nginx/conf.d/security-headers.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload nginx
+  tags:
+    - frontend
+    - security
+
+# Configure monitoring for frontend
+- name: Configure monitoring for frontend
+  block:
+    - name: Generate Prometheus frontend targets
+      template:
+        src: templates/prometheus-frontend-targets.yml.j2
+        dest: /etc/prometheus/targets/frontend.yml
+        owner: prometheus
+        group: prometheus
+        mode: '0644'
+      notify: Reload Prometheus
+      when: install_prometheus | default(false)
+    
+    - name: Configure frontend logging for CloudWatch
+      template:
+        src: templates/cloudwatch-frontend-config.json.j2
+        dest: /opt/aws/amazon-cloudwatch-agent/etc/frontend-logs.json
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart CloudWatch agent
+      when: install_cloudwatch_agent | default(true)
+    
+    - name: Set up Nginx log rotation
+      template:
+        src: templates/logrotate-nginx.j2
+        dest: /etc/logrotate.d/nginx
+        owner: root
+        group: root
+        mode: '0644'
+    
+    - name: Set up health check script
+      template:
+        src: templates/health-check.sh.j2
+        dest: "{{ app_base_dir }}/frontend/scripts/health-check.sh"
+        owner: molecule-app
+        group: molecule-app
+        mode: '0755'
+    
+    - name: Set up health check cron job
+      cron:
+        name: "Frontend health check"
+        job: "{{ app_base_dir }}/frontend/scripts/health-check.sh >> {{ app_base_dir }}/frontend/logs/health-check.log 2>&1"
+        minute: "*/5"
+  tags:
+    - frontend
+    - monitoring
+
+# Handlers
+handlers:
+  - name: Reload nginx
+    service:
+      name: nginx
+      state: reloaded
+  
+  - name: Restart nginx
+    service:
+      name: nginx
+      state: restarted
+  
+  - name: Reload Prometheus
+    service:
+      name: prometheus
+      state: reloaded
+    when: install_prometheus | default(false)
+  
+  - name: Restart CloudWatch agent
+    service:
+      name: amazon-cloudwatch-agent
+      state: restarted
+    when: install_cloudwatch_agent | default(true)
