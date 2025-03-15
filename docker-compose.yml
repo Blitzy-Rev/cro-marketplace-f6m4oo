@@ -1,0 +1,190 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./src/web
+      dockerfile: Dockerfile
+      target: development
+    container_name: molecule-platform-frontend
+    volumes:
+      - ./src/web:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - VITE_API_BASE_URL=http://localhost:8000/api/v1
+      - VITE_APP_TITLE=MoleculeFlow
+    command: ["npm", "run", "dev"]
+    restart: unless-stopped
+    networks:
+      - frontend-network
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  backend:
+    build:
+      context: ./src/backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: molecule-platform-api
+    volumes:
+      - ./src/backend:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - ENV=development
+      - DEBUG=True
+      - DATABASE_URL=postgresql://postgres:postgres@database:5432/molecule_platform
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=development_secret_key
+      - API_V1_STR=/api/v1
+      - PROJECT_NAME=Molecular Data Management Platform
+      - BACKEND_CORS_ORIGINS=http://localhost:3000,http://frontend:3000
+      - LOG_LEVEL=DEBUG
+      - AI_ENGINE_API_URL=${AI_ENGINE_API_URL:-http://mock-ai-engine:5000/api}
+      - AI_ENGINE_API_KEY=${AI_ENGINE_API_KEY:-development_key}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    restart: unless-stopped
+    networks:
+      - frontend-network
+      - backend-network
+    depends_on:
+      - database
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  molecule_service:
+    build:
+      context: ./src/backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: molecule-platform-molecule-service
+    volumes:
+      - ./src/backend:/app
+      - molecule-data:/app/data/molecules
+    environment:
+      - ENV=development
+      - DEBUG=True
+      - DATABASE_URL=postgresql://postgres:postgres@database:5432/molecule_platform
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=development_secret_key
+      - SERVICE_TYPE=molecule_processor
+      - LOG_LEVEL=DEBUG
+      - AI_ENGINE_API_URL=${AI_ENGINE_API_URL:-http://mock-ai-engine:5000/api}
+      - AI_ENGINE_API_KEY=${AI_ENGINE_API_KEY:-development_key}
+    command: ["python", "-m", "app.services.molecule_service", "--debug"]
+    restart: unless-stopped
+    networks:
+      - backend-network
+    depends_on:
+      - database
+      - redis
+
+  worker:
+    build:
+      context: ./src/backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: molecule-platform-worker
+    volumes:
+      - ./src/backend:/app
+      - molecule-data:/app/data/molecules
+    environment:
+      - ENV=development
+      - DEBUG=True
+      - DATABASE_URL=postgresql://postgres:postgres@database:5432/molecule_platform
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=development_secret_key
+      - SERVICE_TYPE=worker
+      - LOG_LEVEL=DEBUG
+      - WORKER_CONCURRENCY=4
+    command: ["watchmedo", "auto-restart", "--directory=./", "--pattern=*.py", "--recursive", "--", "celery", "-A", "app.tasks.celery_app", "worker", "--loglevel=info"]
+    restart: unless-stopped
+    networks:
+      - backend-network
+    depends_on:
+      - database
+      - redis
+
+  mock-ai-engine:
+    build:
+      context: ./src/backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: molecule-platform-mock-ai-engine
+    volumes:
+      - ./src/backend:/app
+    ports:
+      - "5000:5000"
+    environment:
+      - ENV=development
+      - DEBUG=True
+      - SERVICE_TYPE=mock_ai_engine
+      - LOG_LEVEL=DEBUG
+    command: ["python", "-m", "app.services.mock_ai_engine", "--host", "0.0.0.0", "--port", "5000"]
+    restart: unless-stopped
+    networks:
+      - backend-network
+
+  database:
+    image: postgres:15.0
+    container_name: molecule-platform-db
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=molecule_platform
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - backend-network
+
+  redis:
+    image: redis:7.0
+    container_name: molecule-platform-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - backend-network
+
+networks:
+  frontend-network:
+    driver: bridge
+  backend-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  molecule-data:
+    driver: local
+  document-storage:
+    driver: local
