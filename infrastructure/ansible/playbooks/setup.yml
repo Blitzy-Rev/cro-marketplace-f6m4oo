@@ -1,0 +1,277 @@
+---
+# Ansible playbook for initial server setup and configuration
+# Molecular Data Management and CRO Integration Platform
+#
+# This playbook performs:
+# - System updates and Python installation
+# - AWS integration configuration
+# - Network and security setup
+# - Docker and container runtime configuration
+# - Monitoring agent installation
+# - Backup system configuration
+
+- name: Molecular Platform Initial Setup
+  hosts: all
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../vars/common.yml
+    - ../vars/{{ environment }}.yml
+
+  pre_tasks:
+    - name: Check if Ansible can connect to the host
+      ping:
+
+    - name: Gather server information
+      setup:
+        gather_subset:
+          - hardware
+          - network
+          - virtual
+
+    - name: Update package cache (Debian)
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_os_family == 'Debian'
+
+    - name: Update package cache (RedHat)
+      yum:
+        update_cache: true
+      when: ansible_os_family == 'RedHat'
+
+    - name: Install Python 3
+      package:
+        name:
+          - python3
+          - python3-pip
+        state: present
+
+    - name: Set timezone to UTC
+      timezone:
+        name: UTC
+
+  tasks:
+    - name: Configure AWS integration
+      block:
+        - name: Install AWS CLI
+          pip:
+            name: awscli
+            state: present
+
+        - name: Configure AWS credentials
+          template:
+            src: ../templates/aws-credentials.j2
+            dest: /home/{{ ansible_user }}/.aws/credentials
+            owner: "{{ ansible_user }}"
+            group: "{{ ansible_user }}"
+            mode: '0600'
+
+        - name: Configure AWS region
+          template:
+            src: ../templates/aws-config.j2
+            dest: /home/{{ ansible_user }}/.aws/config
+            owner: "{{ ansible_user }}"
+            group: "{{ ansible_user }}"
+            mode: '0644'
+
+        - name: Install AWS SSM agent
+          package:
+            name: amazon-ssm-agent
+            state: present
+          when: install_ssm_agent | default(true)
+
+        - name: Enable and start SSM agent
+          service:
+            name: amazon-ssm-agent
+            state: started
+            enabled: true
+          when: install_ssm_agent | default(true)
+      tags:
+        - aws
+        - setup
+
+    - name: Configure networking
+      block:
+        - name: Configure hostname
+          hostname:
+            name: "{{ inventory_hostname }}"
+
+        - name: Configure hosts file
+          template:
+            src: ../templates/hosts.j2
+            dest: /etc/hosts
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Configure network interfaces
+          template:
+            src: ../templates/interfaces.j2
+            dest: /etc/network/interfaces
+            owner: root
+            group: root
+            mode: '0644'
+          when: ansible_os_family == 'Debian'
+
+        - name: Configure firewall rules
+          include_tasks: ../tasks/configure_firewall.yml
+      tags:
+        - network
+        - setup
+
+    - name: Configure Docker registry access
+      block:
+        - name: Create Docker config directory
+          file:
+            path: /home/{{ ansible_user }}/.docker
+            state: directory
+            owner: "{{ ansible_user }}"
+            group: "{{ ansible_user }}"
+            mode: '0700'
+
+        - name: Configure Docker registry authentication
+          template:
+            src: ../templates/docker-config.j2
+            dest: /home/{{ ansible_user }}/.docker/config.json
+            owner: "{{ ansible_user }}"
+            group: "{{ ansible_user }}"
+            mode: '0600'
+
+        - name: Login to ECR
+          shell: aws ecr get-login-password --region {{ aws_region }} | docker login --username AWS --password-stdin {{ ecr_registry }}
+          args:
+            executable: /bin/bash
+      tags:
+        - docker
+        - registry
+
+    - name: Configure monitoring
+      block:
+        - name: Install monitoring agents
+          package:
+            name:
+              - prometheus-node-exporter
+              - collectd
+            state: present
+
+        - name: Configure node exporter
+          template:
+            src: ../templates/node-exporter.service.j2
+            dest: /etc/systemd/system/node-exporter.service
+            owner: root
+            group: root
+            mode: '0644'
+          notify: Restart node exporter
+
+        - name: Enable and start node exporter
+          service:
+            name: prometheus-node-exporter
+            state: started
+            enabled: true
+
+        - name: Install CloudWatch agent
+          include_tasks: ../tasks/install_cloudwatch_agent.yml
+          when: install_cloudwatch_agent | default(true)
+      tags:
+        - monitoring
+        - setup
+
+    - name: Configure backup system
+      block:
+        - name: Install backup tools
+          package:
+            name:
+              - rsync
+              - duplicity
+            state: present
+
+        - name: Create backup directories
+          file:
+            path: "{{ item }}"
+            state: directory
+            owner: root
+            group: root
+            mode: '0700'
+          loop:
+            - /opt/backups
+            - /opt/backups/daily
+            - /opt/backups/weekly
+
+        - name: Configure backup scripts
+          template:
+            src: ../templates/backup-script.j2
+            dest: /usr/local/bin/backup.sh
+            owner: root
+            group: root
+            mode: '0700'
+
+        - name: Configure backup cron jobs
+          cron:
+            name: Daily backup
+            job: /usr/local/bin/backup.sh daily
+            hour: '1'
+            minute: '0'
+      tags:
+        - backup
+        - setup
+
+  handlers:
+    - name: Restart SSH
+      service:
+        name: sshd
+        state: restarted
+
+    - name: Restart node exporter
+      service:
+        name: prometheus-node-exporter
+        state: restarted
+
+    - name: Restart Docker
+      service:
+        name: docker
+        state: restarted
+
+    - name: Restart CloudWatch agent
+      service:
+        name: amazon-cloudwatch-agent
+        state: restarted
+
+  post_tasks:
+    - name: Verify Docker installation
+      command: docker --version
+      register: docker_version
+      changed_when: false
+
+    - name: Display Docker version
+      debug:
+        var: docker_version.stdout
+
+    - name: Verify AWS CLI installation
+      command: aws --version
+      register: aws_version
+      changed_when: false
+
+    - name: Display AWS CLI version
+      debug:
+        var: aws_version.stdout
+
+    - name: Check system status
+      command: systemctl status
+      register: system_status
+      changed_when: false
+
+    - name: Display system status summary
+      debug:
+        msg: "System setup completed successfully. Environment: {{ environment }}"
+
+    - name: Send setup completion notification
+      uri:
+        url: "{{ slack_webhook_url }}"
+        method: POST
+        body_format: json
+        body:
+          text: "Server setup completed for {{ inventory_hostname }} in {{ environment }} environment.\nTimestamp: {{ ansible_date_time.iso8601 }}"
+      when: slack_webhook_url is defined
+      tags:
+        - notification
