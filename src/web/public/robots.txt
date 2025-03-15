@@ -1,0 +1,22 @@
+User-agent: *
+# Allow crawlers to index the public pages
+Allow: /
+
+# Disallow crawling of authentication pages
+Disallow: /auth/
+Disallow: /login
+Disallow: /register
+Disallow: /password-reset
+
+# Disallow crawling of user-specific data
+Disallow: /dashboard
+Disallow: /molecules/
+Disallow: /libraries/
+Disallow: /submissions/
+Disallow: /results/
+
+# Disallow crawling of API endpoints
+Disallow: /api/
+
+# Sitemap location
+Sitemap: https://example.com/sitemap.xml
