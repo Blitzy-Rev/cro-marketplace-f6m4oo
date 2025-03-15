@@ -1,0 +1,415 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template for API Gateway resources for the Molecular Data Management and CRO Integration Platform'
+
+Parameters:
+  EnvironmentName:
+    Description: 'Name of the environment (dev, staging, prod)'
+    Type: String
+    Default: 'dev'
+    AllowedValues:
+      - 'dev'
+      - 'staging'
+      - 'prod'
+  
+  ProjectName:
+    Description: 'Name of the project'
+    Type: String
+    Default: 'MoleculeFlow'
+  
+  ApiName:
+    Description: 'Name of the API Gateway'
+    Type: String
+    Default: 'MoleculeFlowAPI'
+  
+  ApiStageName:
+    Description: 'Name of the API Gateway stage'
+    Type: String
+    Default: 'v1'
+  
+  CognitoUserPoolArn:
+    Description: 'ARN of the Cognito User Pool for API authorization'
+    Type: String
+  
+  APIGatewayProcessorLambdaArn:
+    Description: 'ARN of the Lambda function for API Gateway processing'
+    Type: String
+  
+  CSVProcessorLambdaArn:
+    Description: 'ARN of the Lambda function for CSV processing'
+    Type: String
+  
+  AIIntegrationLambdaArn:
+    Description: 'ARN of the Lambda function for AI integration'
+    Type: String
+  
+  DocumentProcessorLambdaArn:
+    Description: 'ARN of the Lambda function for document processing'
+    Type: String
+  
+  NotificationLambdaArn:
+    Description: 'ARN of the Lambda function for notifications'
+    Type: String
+  
+  OpenAPISpecificationS3Bucket:
+    Description: 'S3 bucket containing the OpenAPI specification'
+    Type: String
+  
+  OpenAPISpecificationS3Key:
+    Description: 'S3 key for the OpenAPI specification file'
+    Type: String
+    Default: 'api/openapi.yaml'
+  
+  EnableApiCaching:
+    Description: 'Enable API Gateway caching'
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  
+  CachingTtlInSeconds:
+    Description: 'TTL for API Gateway cache in seconds'
+    Type: Number
+    Default: 300
+    MinValue: 0
+  
+  EnableWaf:
+    Description: 'Enable WAF protection for API Gateway'
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  
+  WafAclArn:
+    Description: 'ARN of the WAF ACL to associate with API Gateway'
+    Type: String
+    Default: ''
+  
+  EnableCloudWatchLogs:
+    Description: 'Enable CloudWatch Logs for API Gateway'
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  
+  LogRetentionInDays:
+    Description: 'Number of days to retain API Gateway logs'
+    Type: Number
+    Default: 30
+    AllowedValues:
+      - 1
+      - 3
+      - 5
+      - 7
+      - 14
+      - 30
+      - 60
+      - 90
+      - 120
+      - 150
+      - 180
+      - 365
+      - 400
+      - 545
+      - 731
+      - 1827
+      - 3653
+  
+  ThrottlingRateLimit:
+    Description: 'API Gateway throttling rate limit'
+    Type: Number
+    Default: 1000
+  
+  ThrottlingBurstLimit:
+    Description: 'API Gateway throttling burst limit'
+    Type: Number
+    Default: 2000
+  
+  CustomDomainName:
+    Description: 'Custom domain name for API Gateway'
+    Type: String
+    Default: ''
+  
+  CustomDomainCertificateArn:
+    Description: 'ARN of the ACM certificate for the custom domain'
+    Type: String
+    Default: ''
+
+Conditions:
+  EnableWafCondition:
+    !And
+      - !Equals [!Ref EnableWaf, 'true']
+      - !Not [!Equals [!Ref WafAclArn, '']]
+  
+  EnableCloudWatchLogsCondition:
+    !Equals [!Ref EnableCloudWatchLogs, 'true']
+  
+  UseCustomDomainCondition:
+    !And
+      - !Not [!Equals [!Ref CustomDomainName, '']]
+      - !Not [!Equals [!Ref CustomDomainCertificateArn, '']]
+
+Resources:
+  # API Gateway REST API
+  ApiGatewayRestApi:
+    Type: 'AWS::ApiGateway::RestApi'
+    Properties:
+      Name: !Join ['-', [!Ref ApiName, !Ref EnvironmentName]]
+      Description: 'API for the Molecular Data Management and CRO Integration Platform'
+      EndpointConfiguration:
+        Types:
+          - 'REGIONAL'
+      ApiKeySourceType: 'HEADER'
+      Body:
+        Fn::Transform:
+          Name: 'AWS::Include'
+          Parameters:
+            Location: !Sub 's3://${OpenAPISpecificationS3Bucket}/${OpenAPISpecificationS3Key}'
+      FailOnWarnings: true
+      Tags:
+        - Key: 'Environment'
+          Value: !Ref EnvironmentName
+        - Key: 'Project'
+          Value: !Ref ProjectName
+  
+  # Cognito User Pool authorizer
+  ApiGatewayCognitoAuthorizer:
+    Type: 'AWS::ApiGateway::Authorizer'
+    Properties:
+      Name: !Join ['-', [!Ref ProjectName, 'cognito-authorizer', !Ref EnvironmentName]]
+      Type: 'COGNITO_USER_POOLS'
+      IdentitySource: 'method.request.header.Authorization'
+      RestApiId: !Ref ApiGatewayRestApi
+      ProviderARNs:
+        - !Ref CognitoUserPoolArn
+  
+  # API Gateway deployment
+  ApiGatewayDeployment:
+    Type: 'AWS::ApiGateway::Deployment'
+    DependsOn:
+      - ApiGatewayRestApi
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      StageName: 'dummy'
+  
+  # API Gateway stage
+  ApiGatewayStage:
+    Type: 'AWS::ApiGateway::Stage'
+    Properties:
+      DeploymentId: !Ref ApiGatewayDeployment
+      RestApiId: !Ref ApiGatewayRestApi
+      StageName: !Ref ApiStageName
+      Description: !Join ['', ['API stage for ', !Ref EnvironmentName, ' environment']]
+      CacheClusterEnabled: !Ref EnableApiCaching
+      CacheClusterSize: '0.5'
+      CachingEnabled: !Ref EnableApiCaching
+      CacheTtlInSeconds: !Ref CachingTtlInSeconds
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          CachingEnabled: !Ref EnableApiCaching
+          CacheTtlInSeconds: !Ref CachingTtlInSeconds
+          MetricsEnabled: true
+          DataTraceEnabled: true
+          ThrottlingRateLimit: !Ref ThrottlingRateLimit
+          ThrottlingBurstLimit: !Ref ThrottlingBurstLimit
+          LoggingLevel: 'INFO'
+      Variables:
+        environment: !Ref EnvironmentName
+      Tags:
+        - Key: 'Environment'
+          Value: !Ref EnvironmentName
+        - Key: 'Project'
+          Value: !Ref ProjectName
+  
+  # API Gateway account settings
+  ApiGatewayAccount:
+    Type: 'AWS::ApiGateway::Account'
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
+  
+  # IAM role for API Gateway CloudWatch logging
+  ApiGatewayCloudWatchRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'apigateway.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs'
+      Path: '/'
+      Tags:
+        - Key: 'Environment'
+          Value: !Ref EnvironmentName
+        - Key: 'Project'
+          Value: !Ref ProjectName
+  
+  # Lambda permissions
+  ApiGatewayLambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref APIGatewayProcessorLambdaArn
+      Principal: 'apigateway.amazonaws.com'
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*'
+  
+  ApiGatewayCSVProcessorLambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref CSVProcessorLambdaArn
+      Principal: 'apigateway.amazonaws.com'
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*'
+  
+  ApiGatewayAIIntegrationLambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref AIIntegrationLambdaArn
+      Principal: 'apigateway.amazonaws.com'
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*'
+  
+  ApiGatewayDocumentProcessorLambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref DocumentProcessorLambdaArn
+      Principal: 'apigateway.amazonaws.com'
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*'
+  
+  ApiGatewayNotificationLambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref NotificationLambdaArn
+      Principal: 'apigateway.amazonaws.com'
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*'
+  
+  # API Gateway usage plan
+  ApiGatewayUsagePlan:
+    Type: 'AWS::ApiGateway::UsagePlan'
+    Properties:
+      UsagePlanName: !Join ['-', [!Ref ProjectName, 'usage-plan', !Ref EnvironmentName]]
+      Description: 'Usage plan for the Molecular Data Management and CRO Integration Platform API'
+      ApiStages:
+        - ApiId: !Ref ApiGatewayRestApi
+          Stage: !Ref ApiGatewayStage
+      Throttle:
+        RateLimit: !Ref ThrottlingRateLimit
+        BurstLimit: !Ref ThrottlingBurstLimit
+      Quota:
+        Limit: 10000
+        Period: 'MONTH'
+      Tags:
+        - Key: 'Environment'
+          Value: !Ref EnvironmentName
+        - Key: 'Project'
+          Value: !Ref ProjectName
+  
+  # API key for API Gateway
+  ApiGatewayApiKey:
+    Type: 'AWS::ApiGateway::ApiKey'
+    Properties:
+      Name: !Join ['-', [!Ref ProjectName, 'api-key', !Ref EnvironmentName]]
+      Description: 'API key for the Molecular Data Management and CRO Integration Platform API'
+      Enabled: true
+      StageKeys:
+        - RestApiId: !Ref ApiGatewayRestApi
+          StageName: !Ref ApiGatewayStage
+      Tags:
+        - Key: 'Environment'
+          Value: !Ref EnvironmentName
+        - Key: 'Project'
+          Value: !Ref ProjectName
+  
+  # Associates API key with usage plan
+  ApiGatewayUsagePlanKey:
+    Type: 'AWS::ApiGateway::UsagePlanKey'
+    Properties:
+      KeyId: !Ref ApiGatewayApiKey
+      KeyType: 'API_KEY'
+      UsagePlanId: !Ref ApiGatewayUsagePlan
+  
+  # Associates WAF ACL with API Gateway stage
+  ApiGatewayWafAssociation:
+    Type: 'AWS::WAFv2::WebACLAssociation'
+    Condition: EnableWafCondition
+    Properties:
+      ResourceArn: !Sub 'arn:aws:apigateway:${AWS::Region}::/restapis/${ApiGatewayRestApi}/stages/${ApiGatewayStage}'
+      WebACLArn: !Ref WafAclArn
+  
+  # CloudWatch Log Group for API Gateway
+  ApiGatewayLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Condition: EnableCloudWatchLogsCondition
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/${ApiGatewayRestApi}/${ApiGatewayStage}'
+      RetentionInDays: !Ref LogRetentionInDays
+  
+  # Custom domain for API Gateway
+  ApiGatewayCustomDomain:
+    Type: 'AWS::ApiGateway::DomainName'
+    Condition: UseCustomDomainCondition
+    Properties:
+      DomainName: !Ref CustomDomainName
+      CertificateArn: !Ref CustomDomainCertificateArn
+      EndpointConfiguration:
+        Types:
+          - 'REGIONAL'
+      SecurityPolicy: 'TLS_1_2'
+      Tags:
+        - Key: 'Environment'
+          Value: !Ref EnvironmentName
+        - Key: 'Project'
+          Value: !Ref ProjectName
+  
+  # Maps custom domain to API Gateway stage
+  ApiGatewayBasePathMapping:
+    Type: 'AWS::ApiGateway::BasePathMapping'
+    Condition: UseCustomDomainCondition
+    DependsOn:
+      - ApiGatewayCustomDomain
+      - ApiGatewayStage
+    Properties:
+      DomainName: !Ref CustomDomainName
+      RestApiId: !Ref ApiGatewayRestApi
+      Stage: !Ref ApiGatewayStage
+      BasePath: !Ref ApiStageName
+
+Outputs:
+  ApiGatewayRestApiId:
+    Description: 'ID of the API Gateway REST API'
+    Value: !Ref ApiGatewayRestApi
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiGatewayRestApiId'
+  
+  ApiGatewayRestApiRootResourceId:
+    Description: 'ID of the root resource of the API Gateway REST API'
+    Value: !GetAtt ApiGatewayRestApi.RootResourceId
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiGatewayRestApiRootResourceId'
+  
+  ApiGatewayUrl:
+    Description: 'URL of the API Gateway'
+    Value: !Sub 'https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiGatewayStage}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiGatewayUrl'
+  
+  ApiGatewayCustomDomainUrl:
+    Description: 'Custom domain URL of the API Gateway'
+    Condition: UseCustomDomainCondition
+    Value: !Sub 'https://${CustomDomainName}/${ApiStageName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiGatewayCustomDomainUrl'
+  
+  ApiGatewayStageName:
+    Description: 'Name of the API Gateway stage'
+    Value: !Ref ApiGatewayStage
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiGatewayStageName'
