@@ -1,0 +1,119 @@
+---
+# Ansible inventory file for the development environment
+# Molecular Data Management and CRO Integration Platform
+
+all:
+  vars:
+    ansible_python_interpreter: '/usr/bin/python3'
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+    ansible_become: true
+    project_name: 'moleculeflow'
+    docker_registry: "{{ lookup('env', 'DOCKER_REGISTRY') }}"
+    aws_account_id: "{{ lookup('env', 'AWS_ACCOUNT_ID') }}"
+
+  children:
+    dev:
+      vars:
+        environment: 'dev'
+        aws_region: 'us-east-1'
+        vpc_id: "{{ lookup('env', 'DEV_VPC_ID') }}"
+        deployment_type: 'rolling_update'
+        domain_name: 'dev.moleculeflow.example.com'
+        log_level: 'DEBUG'
+        backup_enabled: false
+        monitoring_enabled: true
+        alert_email: 'dev-team@example.com'
+        s3_document_bucket: 'molecule-platform-dev-documents'
+        s3_csv_bucket: 'molecule-platform-dev-csv'
+        s3_results_bucket: 'molecule-platform-dev-results'
+        cloudwatch_log_retention: 7
+        app_version: "{{ lookup('env', 'APP_VERSION') | default('latest', true) }}"
+        backend_port_map:
+          blue: 8001
+          green: 8002
+        deployment_color: 'blue'
+        app_base_dir: '/opt/moleculeflow'
+        ecr_registry: '{{ aws_account_id }}.dkr.ecr.{{ aws_region }}.amazonaws.com'
+        ecr_repository_backend: 'moleculeflow/backend'
+        ecr_repository_frontend: 'moleculeflow/frontend'
+        image_tag: '{{ app_version }}'
+        database_url: "postgresql://molecule_app:{{ lookup('env', 'DB_PASSWORD') }}@{{ groups['database_servers'][0] }}:5432/molecule_db"
+        redis_url: "redis://{{ groups['cache_servers'][0] }}:6379/0"
+        ai_engine_url: 'https://ai-engine-dev.example.com/api/v1'
+        ai_engine_api_key: "{{ lookup('env', 'AI_ENGINE_API_KEY') }}"
+        api_url: 'https://api.{{ domain_name }}'
+        frontend_url: 'https://{{ domain_name }}'
+        auth_domain: 'auth.{{ domain_name }}'
+
+      children:
+        web_servers:
+          hosts:
+            dev-web-1:
+              ansible_host: 10.0.1.5
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/dev-key.pem
+          vars:
+            service_name: 'frontend'
+            container_count: 1
+            cpu: 0.5
+            memory: 1024
+
+        api_servers:
+          hosts:
+            dev-api-1:
+              ansible_host: 10.0.2.5
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/dev-key.pem
+          vars:
+            service_name: 'backend'
+            container_count: 1
+            cpu: 1.0
+            memory: 2048
+
+        worker_servers:
+          hosts:
+            dev-worker-1:
+              ansible_host: 10.0.2.10
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/dev-key.pem
+          vars:
+            service_name: 'worker'
+            container_count: 1
+            cpu: 2.0
+            memory: 4096
+
+        database_servers:
+          hosts:
+            dev-db-1:
+              ansible_host: 10.0.3.5
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/dev-key.pem
+          vars:
+            db_instance_class: 'db.t3.medium'
+            db_allocated_storage: 20
+            db_max_allocated_storage: 100
+            db_backup_retention_period: 7
+            multi_az: false
+
+        cache_servers:
+          hosts:
+            dev-cache-1:
+              ansible_host: 10.0.3.10
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/dev-key.pem
+          vars:
+            cache_node_type: 'cache.t3.small'
+            cache_engine_version: '7.0'
+            cache_parameter_group: 'default.redis7.cluster.on'
+            cache_nodes: 1
+
+        monitoring_servers:
+          hosts:
+            dev-monitor-1:
+              ansible_host: 10.0.4.5
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/dev-key.pem
+          vars:
+            prometheus_retention_time: '15d'
+            grafana_admin_password: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') | default('admin', true) }}"
+            alertmanager_resolve_timeout: '5m'
