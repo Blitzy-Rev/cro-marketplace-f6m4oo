@@ -1,0 +1,190 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: molecule-platform-frontend
+  namespace: molecule-platform
+  labels:
+    app: frontend
+    app.kubernetes.io/name: molecule-platform
+    app.kubernetes.io/part-of: molecule-data-platform
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/managed-by: kubectl
+    environment: production
+    tier: frontend
+  annotations:
+    description: "Frontend web application for the Molecular Data Management and CRO Integration Platform"
+    kubernetes.io/change-cause: "Initial deployment of frontend application"
+    app.kubernetes.io/version: "1.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+      app.kubernetes.io/name: molecule-platform
+      app.kubernetes.io/component: frontend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: frontend
+        app.kubernetes.io/name: molecule-platform
+        app.kubernetes.io/part-of: molecule-data-platform
+        app.kubernetes.io/component: frontend
+        environment: production
+        tier: frontend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "80"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+      - name: frontend
+        image: moleculeflow/frontend:1.0.0
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
+          name: http
+          protocol: TCP
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
+        env:
+        - name: VITE_APP_TITLE
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_APP_TITLE
+        - name: VITE_API_BASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_API_BASE_URL
+        - name: VITE_AUTH_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_AUTH_ENABLED
+        - name: VITE_MOCK_API
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_MOCK_API
+        - name: VITE_ENABLE_LOGGING
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_ENABLE_LOGGING
+        - name: VITE_LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_LOG_LEVEL
+        - name: VITE_DOCUSIGN_INTEGRATION_URL
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_DOCUSIGN_INTEGRATION_URL
+        - name: VITE_AI_PREDICTION_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_AI_PREDICTION_ENABLED
+        - name: VITE_WEBSOCKET_URL
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_WEBSOCKET_URL
+        - name: VITE_MAX_UPLOAD_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_MAX_UPLOAD_SIZE
+        - name: VITE_MAX_CSV_ROWS
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_MAX_CSV_ROWS
+        - name: VITE_DEFAULT_PAGINATION_LIMIT
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_DEFAULT_PAGINATION_LIMIT
+        - name: VITE_DEFAULT_THEME
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_DEFAULT_THEME
+        - name: VITE_TOAST_DURATION
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_TOAST_DURATION
+        - name: VITE_DASHBOARD_REFRESH_INTERVAL
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_DASHBOARD_REFRESH_INTERVAL
+        - name: VITE_ENABLE_3D_MOLECULE_VIEWER
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_ENABLE_3D_MOLECULE_VIEWER
+        - name: VITE_ENABLE_REAL_TIME_NOTIFICATIONS
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_ENABLE_REAL_TIME_NOTIFICATIONS
+        - name: VITE_ENABLE_MOLECULE_COMPARISON
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_ENABLE_MOLECULE_COMPARISON
+        - name: VITE_ENABLE_BATCH_SUBMISSIONS
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VITE_ENABLE_BATCH_SUBMISSIONS
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          timeoutSeconds: 3
+          periodSeconds: 5
+          successThreshold: 1
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+        - name: tmp-volume
+          mountPath: /tmp
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: molecule-platform-config
+          items:
+            - key: nginx.conf
+              path: nginx.conf
+      - name: tmp-volume
+        emptyDir: {}
+      terminationGracePeriodSeconds: 30
