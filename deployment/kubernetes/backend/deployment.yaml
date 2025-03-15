@@ -1,0 +1,247 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: molecule-platform-backend
+  namespace: molecule-platform
+  labels:
+    app: backend
+    app.kubernetes.io/name: molecule-platform
+    app.kubernetes.io/part-of: molecule-data-platform
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/managed-by: kubectl
+    environment: production
+    tier: application
+  annotations:
+    description: "Backend API service for the Molecular Data Management and CRO Integration Platform"
+    deployment.kubernetes.io/revision: "1"
+    security.compliance/21CFR-part-11: "enabled"
+    security.compliance/GDPR: "enabled"
+    security.compliance/HIPAA: "compliant"
+    owner: "platform-team"
+    contact: "platform-support@example.com"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: backend
+        app.kubernetes.io/name: molecule-platform
+        app.kubernetes.io/part-of: molecule-data-platform
+        app.kubernetes.io/component: backend
+        environment: production
+        tier: application
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8000"
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+      - name: backend
+        image: molecule-platform/backend:1.0.0
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+        env:
+        - name: PROJECT_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: PROJECT_NAME
+        - name: API_V1_STR
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: API_V1_STR
+        - name: VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: VERSION
+        - name: ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: ENVIRONMENT
+        - name: DEBUG
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: DEBUG
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: LOG_LEVEL
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: molecule-platform-secrets
+              key: DATABASE_URL
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: molecule-platform-secrets
+              key: SECRET_KEY
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: molecule-platform-secrets
+              key: JWT_SECRET
+        - name: REDIS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: REDIS_URL
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: molecule-platform-secrets
+              key: REDIS_PASSWORD
+        - name: AWS_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: AWS_REGION
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: molecule-platform-secrets
+              key: AWS_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: molecule-platform-secrets
+              key: AWS_SECRET_ACCESS_KEY
+        - name: S3_BUCKET_NAME
+          valueFrom:
+            secretKeyRef:
+              name: molecule-platform-secrets
+              key: S3_BUCKET_NAME
+        - name: AI_ENGINE_API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: AI_ENGINE_API_URL
+        - name: AI_ENGINE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: molecule-platform-secrets
+              key: AI_ENGINE_API_KEY
+        - name: AI_PREDICTION_BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: AI_PREDICTION_BATCH_SIZE
+        - name: DOCUSIGN_BASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: DOCUSIGN_BASE_URL
+        - name: DOCUSIGN_INTEGRATION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: molecule-platform-secrets
+              key: DOCUSIGN_INTEGRATION_KEY
+        - name: DOCUSIGN_USER_ID
+          valueFrom:
+            secretKeyRef:
+              name: molecule-platform-secrets
+              key: DOCUSIGN_USER_ID
+        - name: DOCUSIGN_ACCOUNT_ID
+          valueFrom:
+            secretKeyRef:
+              name: molecule-platform-secrets
+              key: DOCUSIGN_ACCOUNT_ID
+        - name: DOCUSIGN_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: molecule-platform-secrets
+              key: DOCUSIGN_PRIVATE_KEY
+        - name: DATABASE_MAX_CONNECTIONS
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: DATABASE_MAX_CONNECTIONS
+        - name: ACCESS_TOKEN_EXPIRE_MINUTES
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: ACCESS_TOKEN_EXPIRE_MINUTES
+        - name: REFRESH_TOKEN_EXPIRE_DAYS
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: REFRESH_TOKEN_EXPIRE_DAYS
+        - name: BACKEND_CORS_ORIGINS
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: BACKEND_CORS_ORIGINS
+        - name: MOLECULE_BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: MOLECULE_BATCH_SIZE
+        - name: CSV_MAX_FILE_SIZE_MB
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: CSV_MAX_FILE_SIZE_MB
+        - name: CSV_MAX_ROWS
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: CSV_MAX_ROWS
+        livenessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: http
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: http
+          initialDelaySeconds: 5
+          timeoutSeconds: 3
+          periodSeconds: 5
+          successThreshold: 1
+        volumeMounts:
+        - name: tmp-volume
+          mountPath: /tmp
+        - name: config-volume
+          mountPath: /app/config
+          readOnly: true
+      volumes:
+      - name: tmp-volume
+        emptyDir:
+          sizeLimit: 500Mi
+      - name: config-volume
+        configMap:
+          name: molecule-platform-config
+          items:
+          - key: backend-config.yaml
+            path: config.yaml
