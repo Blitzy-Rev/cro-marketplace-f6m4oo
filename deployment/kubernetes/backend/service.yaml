@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: molecule-platform-backend
+  namespace: molecule-platform
+  labels:
+    app: backend
+    app.kubernetes.io/name: molecule-platform
+    app.kubernetes.io/part-of: molecule-data-platform
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/managed-by: kubectl
+    environment: production
+    tier: application
+  annotations:
+    description: "Backend API service for the Molecular Data Management and CRO Integration Platform"
+    owner: "platform-team"
+    contact: "platform-support@example.com"
+    security.compliance/21CFR-part-11: "enabled"
+    security.compliance/GDPR: "enabled"
+    security.compliance/HIPAA: "compliant"
+spec:
+  selector:
+    app: backend
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: api
+  sessionAffinity: ClientIP
