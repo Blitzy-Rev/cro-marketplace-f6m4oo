@@ -1,0 +1,173 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: molecule-platform
+  labels:
+    app: postgres
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: molecule-data-platform
+    app.kubernetes.io/managed-by: kubectl
+    tier: database
+    compliance: regulated
+  annotations:
+    backup.velero.io/backup-volumes: data
+    description: "PostgreSQL database for the Molecular Data Management and CRO Integration Platform"
+spec:
+  serviceName: postgres-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
+  template:
+    metadata:
+      labels:
+        app: postgres
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/part-of: molecule-data-platform
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9187"
+    spec:
+      securityContext:
+        fsGroup: 999
+        runAsNonRoot: true
+      terminationGracePeriodSeconds: 60
+      initContainers:
+      - name: init-permissions
+        image: busybox:1.35
+        command: ["sh", "-c", "mkdir -p /var/lib/postgresql/data/pgdata && chmod 700 /var/lib/postgresql/data/pgdata && chown -R 999:999 /var/lib/postgresql/data"]
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+      containers:
+      - name: postgres
+        image: postgres:15.0
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            cpu: "1"
+            memory: "4Gi"
+          limits:
+            cpu: "2"
+            memory: "8Gi"
+        env:
+        - name: POSTGRES_USER
+          value: "dbadmin"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: molecule-platform-secrets
+              key: DATABASE_PASSWORD
+        - name: POSTGRES_DB
+          value: "molecule_platform"
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        - name: POSTGRES_INITDB_ARGS
+          value: "--data-checksums --locale=en_US.UTF-8"
+        # PostgreSQL configuration via environment variables
+        - name: POSTGRES_MAX_CONNECTIONS
+          valueFrom:
+            configMapKeyRef:
+              name: molecule-platform-config
+              key: DATABASE_MAX_CONNECTIONS
+              optional: true
+        - name: POSTGRES_SHARED_BUFFERS
+          value: "2GB"
+        - name: POSTGRES_EFFECTIVE_CACHE_SIZE
+          value: "6GB"
+        - name: POSTGRES_WORK_MEM
+          value: "64MB"
+        - name: POSTGRES_MAINTENANCE_WORK_MEM
+          value: "512MB"
+        - name: POSTGRES_WAL_BUFFERS
+          value: "16MB"
+        - name: POSTGRES_MIN_WAL_SIZE
+          value: "1GB"
+        - name: POSTGRES_MAX_WAL_SIZE
+          value: "4GB"
+        - name: POSTGRES_WAL_LEVEL
+          value: "logical"
+        - name: POSTGRES_RANDOM_PAGE_COST
+          value: "1.1"
+        - name: POSTGRES_ENABLE_PARALLEL_QUERIES
+          value: "on"
+        - name: POSTGRES_JIT
+          value: "on"
+        - name: POSTGRES_EFFECTIVE_IO_CONCURRENCY
+          value: "200"
+        - name: POSTGRES_MAX_WORKER_PROCESSES
+          value: "8"
+        - name: POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER
+          value: "4"
+        - name: POSTGRES_MAX_PARALLEL_WORKERS
+          value: "8"
+        - name: POSTGRES_MAX_PARALLEL_MAINTENANCE_WORKERS
+          value: "4"
+        - name: POSTGRES_SSL
+          value: "on"
+        - name: POSTGRES_SSL_PREFER_SERVER_CIPHERS
+          value: "on"
+        ports:
+        - name: postgres
+          containerPort: 5432
+          protocol: TCP
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - dbadmin
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - dbadmin
+          initialDelaySeconds: 5
+          timeoutSeconds: 3
+          periodSeconds: 5
+          successThreshold: 1
+        startupProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - dbadmin
+          failureThreshold: 30
+          periodSeconds: 10
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+        - name: run
+          mountPath: /var/run/postgresql
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sh", "-c", "pg_ctl -D /var/lib/postgresql/data/pgdata -m fast -w stop"]
+      volumes:
+      - name: run
+        emptyDir: {}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+      labels:
+        app: postgres
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/part-of: molecule-data-platform
+      annotations:
+        backup.velero.io/backup-volumes: "true"
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: "standard"
+      resources:
+        requests:
+          storage: 100Gi
