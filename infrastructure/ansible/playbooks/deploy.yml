@@ -1,0 +1,324 @@
+---
+# Molecular Platform Deployment
+# This playbook deploys the Molecular Data Management and CRO Integration Platform
+
+- name: Molecular Platform Deployment
+  hosts: all
+  become: true
+  gather_facts: true
+  vars_files:
+    - "../vars/common.yml"
+    - "../vars/{{ environment }}.yml"
+
+  pre_tasks:
+    - name: Check if Ansible can connect to the host
+      ping:
+
+    - name: Gather server information
+      setup:
+        gather_subset: ["hardware", "network", "virtual"]
+
+    - name: Set deployment variables
+      set_fact:
+        deployment_id: "{{ ansible_date_time.iso8601_basic_short }}"
+        image_tag: "{{ image_tag | default('latest') }}"
+        deployment_type: "{{ deployment_type | default('blue_green') }}"
+
+    - name: Display deployment information
+      debug:
+        msg: "Starting deployment ID {{ deployment_id }} to {{ environment }} environment with image tag {{ image_tag }}"
+
+  tasks:
+    - name: Prepare for deployment
+      block:
+        - name: Create deployment directory
+          file:
+            path: "{{ app_base_dir }}/deployments/{{ deployment_id }}"
+            state: directory
+            owner: molecule-app
+            group: molecule-app
+            mode: "0755"
+
+        - name: Create deployment log file
+          file:
+            path: "{{ app_base_dir }}/logs/deployment-{{ deployment_id }}.log"
+            state: touch
+            owner: molecule-app
+            group: molecule-app
+            mode: "0644"
+
+        - name: Pull required Docker images
+          community.docker.docker_image:
+            name: "{{ item }}"
+            source: pull
+            force_source: true
+          loop:
+            - "{{ ecr_registry }}/{{ ecr_repository_backend }}:{{ image_tag }}"
+            - "{{ ecr_registry }}/{{ ecr_repository_frontend }}:{{ image_tag }}"
+
+        - name: Backup current configuration
+          copy:
+            src: "{{ app_base_dir }}/config/"
+            dest: "{{ app_base_dir }}/deployments/{{ deployment_id }}/config-backup/"
+            remote_src: true
+      tags: ["prepare", "deployment"]
+
+    - name: Deploy backend services
+      block:
+        - name: Determine current backend deployment color
+          shell: "docker ps --filter 'name=backend-blue' --format '{{ '{{' }}.Names{{ '}}' }}' | grep -q backend-blue && echo 'green' || echo 'blue'"
+          register: backend_color
+          changed_when: false
+          when: "deployment_type == 'blue_green'"
+
+        - name: Set backend deployment color
+          set_fact:
+            deploy_color: "{{ backend_color.stdout if backend_color is defined else 'blue' }}"
+          when: "deployment_type == 'blue_green'"
+
+        - name: Update backend configuration
+          template:
+            src: "../templates/backend-config.yml.j2"
+            dest: "{{ app_base_dir }}/backend/config/config.yml"
+            owner: molecule-app
+            group: molecule-app
+            mode: "0644"
+
+        - name: Deploy backend service
+          community.docker.docker_container:
+            name: "backend-{{ deploy_color if deployment_type == 'blue_green' else 'main' }}"
+            image: "{{ ecr_registry }}/{{ ecr_repository_backend }}:{{ image_tag }}"
+            state: started
+            restart_policy: unless-stopped
+            ports:
+              - "{{ backend_port_map[deploy_color] if deployment_type == 'blue_green' else backend_port }}:8000"
+            env_file: "{{ app_base_dir }}/backend/config/backend.env"
+            volumes:
+              - "{{ app_base_dir }}/backend/config:/app/config:ro"
+              - "{{ app_base_dir }}/backend/logs:/app/logs"
+            networks:
+              - molecule-network
+
+        - name: Verify backend health
+          uri:
+            url: "http://localhost:{{ backend_port_map[deploy_color] if deployment_type == 'blue_green' else backend_port }}/api/v1/health"
+            status_code: 200
+          register: backend_health
+          retries: 10
+          delay: 5
+          until: "backend_health.status == 200"
+
+        - name: Update load balancer configuration
+          template:
+            src: "../templates/nginx-backend-proxy.conf.j2"
+            dest: "/etc/nginx/conf.d/backend-proxy.conf"
+            owner: root
+            group: root
+            mode: "0644"
+          vars:
+            backend_port: "{{ backend_port_map[deploy_color] if deployment_type == 'blue_green' else backend_port }}"
+          notify: Reload nginx
+
+        - name: Stop old backend container
+          community.docker.docker_container:
+            name: "backend-{{ 'blue' if deploy_color == 'green' else 'green' }}"
+            state: stopped
+          when: "deployment_type == 'blue_green' and backend_health.status == 200"
+      when: "inventory_hostname in groups['backend_servers']"
+      tags: ["backend", "deployment"]
+
+    - name: Deploy frontend services
+      block:
+        - name: Update frontend configuration
+          template:
+            src: "../templates/frontend-config.js.j2"
+            dest: "{{ app_base_dir }}/frontend/config/config.js"
+            owner: molecule-app
+            group: molecule-app
+            mode: "0644"
+
+        - name: Deploy frontend service
+          community.docker.docker_container:
+            name: frontend
+            image: "{{ ecr_registry }}/{{ ecr_repository_frontend }}:{{ image_tag }}"
+            state: started
+            restart_policy: unless-stopped
+            ports:
+              - "{{ frontend_internal_port }}:80"
+            env_file: "{{ app_base_dir }}/frontend/config/frontend.env"
+            volumes:
+              - "{{ app_base_dir }}/frontend/config:/app/config:ro"
+              - "{{ app_base_dir }}/frontend/logs:/app/logs"
+            networks:
+              - molecule-network
+
+        - name: Verify frontend health
+          uri:
+            url: "http://localhost:{{ frontend_internal_port }}/health"
+            status_code: 200
+          register: frontend_health
+          retries: 10
+          delay: 5
+          until: "frontend_health.status == 200"
+
+        - name: Update nginx configuration
+          template:
+            src: "../templates/nginx-frontend-proxy.conf.j2"
+            dest: "/etc/nginx/conf.d/frontend-proxy.conf"
+            owner: root
+            group: root
+            mode: "0644"
+          notify: Reload nginx
+      when: "inventory_hostname in groups['frontend_servers']"
+      tags: ["frontend", "deployment"]
+
+    - name: Deploy worker services
+      block:
+        - name: Stop existing worker containers
+          community.docker.docker_container:
+            name: "{{ item }}"
+            state: stopped
+          loop:
+            - worker-csv
+            - worker-ai
+            - worker-notification
+            - worker-document
+          ignore_errors: true
+
+        - name: Deploy worker containers
+          community.docker.docker_container:
+            name: "{{ item.name }}"
+            image: "{{ ecr_registry }}/{{ ecr_repository_backend }}:{{ image_tag }}"
+            command: "{{ item.command }}"
+            state: started
+            restart_policy: unless-stopped
+            env_file: "{{ app_base_dir }}/backend/config/backend.env"
+            volumes:
+              - "{{ app_base_dir }}/backend/config:/app/config:ro"
+              - "{{ app_base_dir }}/backend/logs:/app/logs"
+            networks:
+              - molecule-network
+            cpu_shares: "{{ item.cpu }}"
+            memory: "{{ item.memory }}"
+          loop:
+            - name: worker-csv
+              command: python -m app.tasks.worker --queue csv_processing
+              cpu: 2048
+              memory: "4g"
+            - name: worker-ai
+              command: python -m app.tasks.worker --queue ai_predictions
+              cpu: 2048
+              memory: "8g"
+            - name: worker-notification
+              command: python -m app.tasks.worker --queue notification
+              cpu: 1024
+              memory: "2g"
+            - name: worker-document
+              command: python -m app.tasks.worker --queue document_processing
+              cpu: 1024
+              memory: "2g"
+
+        - name: Verify worker containers
+          community.docker.docker_container_info:
+            name: "{{ item }}"
+          register: worker_info
+          loop:
+            - worker-csv
+            - worker-ai
+            - worker-notification
+            - worker-document
+
+        - name: Display worker status
+          debug:
+            msg: "Worker {{ item.item }} is {{ 'running' if item.container.State.Running else 'not running' }}"
+          loop: "{{ worker_info.results }}"
+      when: "inventory_hostname in groups['worker_servers']"
+      tags: ["worker", "deployment"]
+
+    - name: Perform post-deployment tasks
+      block:
+        - name: Run database migrations
+          shell: "docker exec backend-{{ deploy_color if deployment_type == 'blue_green' else 'main' }} alembic upgrade head"
+          when: "inventory_hostname in groups['backend_servers'] and run_migrations | default(true)"
+
+        - name: Clear Redis cache
+          shell: "docker exec redis redis-cli FLUSHDB"
+          when: "inventory_hostname in groups['cache_servers'] and clear_cache | default(true)"
+
+        - name: Update deployment record
+          copy:
+            content: |
+              Deployment ID: {{ deployment_id }}
+              Timestamp: {{ ansible_date_time.iso8601 }}
+              Environment: {{ environment }}
+              Image Tag: {{ image_tag }}
+              Deployed by: {{ ansible_user }}
+            dest: "{{ app_base_dir }}/deployments/{{ deployment_id }}/deployment-info.txt"
+            owner: molecule-app
+            group: molecule-app
+            mode: "0644"
+
+        - name: Create deployment symlink
+          file:
+            src: "{{ app_base_dir }}/deployments/{{ deployment_id }}"
+            dest: "{{ app_base_dir }}/deployments/current"
+            state: link
+            owner: molecule-app
+            group: molecule-app
+      tags: ["post-deployment"]
+
+  handlers:
+    - name: Reload nginx
+      service:
+        name: nginx
+        state: reloaded
+
+    - name: Restart Docker
+      service:
+        name: docker
+        state: restarted
+
+  post_tasks:
+    - name: Verify deployment
+      block:
+        - name: Check backend API health
+          uri:
+            url: "{{ api_url }}/api/v1/health"
+            status_code: 200
+          register: api_health
+          delegate_to: localhost
+          when: "inventory_hostname == groups['backend_servers'][0]"
+
+        - name: Check frontend health
+          uri:
+            url: "{{ frontend_url }}/health"
+            status_code: 200
+          register: web_health
+          delegate_to: localhost
+          when: "inventory_hostname == groups['frontend_servers'][0]"
+
+        - name: Display deployment verification results
+          debug:
+            msg: "Deployment verification: Backend API {{ 'HEALTHY' if api_health.status == 200 else 'UNHEALTHY' }}, Frontend {{ 'HEALTHY' if web_health.status == 200 else 'UNHEALTHY' }}"
+          when: "inventory_hostname == groups['backend_servers'][0]"
+      tags: ["verification"]
+
+    - name: Send deployment notification
+      uri:
+        url: "{{ slack_webhook_url }}"
+        method: POST
+        body_format: json
+        body:
+          text: |
+            Deployment completed for {{ environment }} environment.
+            Deployment ID: {{ deployment_id }}
+            Image Tag: {{ image_tag }}
+            Timestamp: {{ ansible_date_time.iso8601 }}
+      when: "slack_webhook_url is defined and inventory_hostname == groups['backend_servers'][0]"
+      delegate_to: localhost
+      tags: ["notification"]
+
+    - name: Record deployment in audit log
+      shell: 'echo "{{ ansible_date_time.iso8601 }} - Deployment {{ deployment_id }} completed in {{ environment }} environment with image tag {{ image_tag }}" >> {{ app_base_dir }}/logs/deployment-audit.log'
+      when: "inventory_hostname == groups['backend_servers'][0]"
+      tags: ["audit"]
