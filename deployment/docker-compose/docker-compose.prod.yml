@@ -1,0 +1,299 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ../../src/web
+      dockerfile: Dockerfile
+      target: production
+    container_name: molecule-platform-frontend-prod
+    environment:
+      - NODE_ENV=production
+      - VITE_API_BASE_URL=https://${DOMAIN_NAME:-moleculeflow.com}/api/v1
+      - VITE_APP_TITLE=MoleculeFlow
+    restart: always
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: '512M'
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '-', 'http://localhost/']
+      interval: '30s'
+      timeout: '10s'
+      retries: 3
+      start_period: '40s'
+    networks:
+      - frontend-network-prod
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  backend:
+    build:
+      context: ../../src/backend
+      dockerfile: Dockerfile
+      target: final
+    container_name: molecule-platform-api-prod
+    environment:
+      - ENV=production
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD}@database:5432/molecule_platform_prod
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - API_V1_STR=/api/v1
+      - PROJECT_NAME=Molecular Data Management Platform
+      - BACKEND_CORS_ORIGINS=${CORS_ORIGINS:-https://moleculeflow.com}
+      - LOG_LEVEL=INFO
+      - AI_ENGINE_API_URL=${AI_ENGINE_API_URL}
+    restart: always
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: '2G'
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8000/api/v1/health']
+      interval: '30s'
+      timeout: '10s'
+      retries: 3
+      start_period: '40s'
+    networks:
+      - frontend-network-prod
+      - backend-network-prod
+    depends_on:
+      - database
+      - redis
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  molecule_service:
+    build:
+      context: ../../src/backend
+      dockerfile: Dockerfile
+      target: final
+    container_name: molecule-platform-molecule-service-prod
+    environment:
+      - ENV=production
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD}@database:5432/molecule_platform_prod
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - SERVICE_TYPE=molecule_processor
+      - LOG_LEVEL=INFO
+      - AI_ENGINE_API_URL=${AI_ENGINE_API_URL}
+    command: ['conda', 'run', '-n', 'rdkit-env', 'python', '-m', 'app.services.molecule_service']
+    restart: always
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: '4G'
+    volumes:
+      - molecule-data-prod:/app/data/molecules
+    networks:
+      - backend-network-prod
+    depends_on:
+      - database
+      - redis
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  worker:
+    build:
+      context: ../../src/backend
+      dockerfile: Dockerfile
+      target: final
+    container_name: molecule-platform-worker-prod
+    environment:
+      - ENV=production
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD}@database:5432/molecule_platform_prod
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - SERVICE_TYPE=worker
+      - LOG_LEVEL=INFO
+    command: ['conda', 'run', '-n', 'rdkit-env', 'celery', '-A', 'app.tasks.celery_app', 'worker', '--loglevel=info', '--concurrency=8']
+    restart: always
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: '8G'
+    volumes:
+      - molecule-data-prod:/app/data/molecules
+    networks:
+      - backend-network-prod
+    depends_on:
+      - database
+      - redis
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  database:
+    image: postgres:15.0
+    container_name: molecule-platform-db-prod
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=molecule_platform_prod
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data-prod:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: '4G'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: '10s'
+      timeout: '5s'
+      retries: 5
+      start_period: '30s'
+    restart: always
+    networks:
+      - backend-network-prod
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+    command:
+      - '-c'
+      - 'max_connections=200'
+      - '-c'
+      - 'shared_buffers=1GB'
+      - '-c'
+      - 'effective_cache_size=3GB'
+      - '-c'
+      - 'work_mem=16MB'
+      - '-c'
+      - 'maintenance_work_mem=256MB'
+      - '-c'
+      - 'random_page_cost=1.1'
+      - '-c'
+      - 'temp_file_limit=10GB'
+      - '-c'
+      - 'log_min_duration_statement=200ms'
+      - '-c'
+      - 'idle_in_transaction_session_timeout=10000'
+      - '-c'
+      - 'lock_timeout=1000'
+      - '-c'
+      - 'statement_timeout=60000'
+      - '-c'
+      - 'shared_preload_libraries=pg_stat_statements'
+      - '-c'
+      - 'pg_stat_statements.max=10000'
+      - '-c'
+      - 'pg_stat_statements.track=all'
+
+  redis:
+    image: redis:7.0
+    container_name: molecule-platform-redis-prod
+    volumes:
+      - redis-data-prod:/data
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: '2G'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: '10s'
+      timeout: '5s'
+      retries: 5
+      start_period: '30s'
+    restart: always
+    networks:
+      - backend-network-prod
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory', '1536mb', '--maxmemory-policy', 'allkeys-lru']
+
+  nginx:
+    image: nginx:alpine
+    container_name: molecule-platform-nginx-prod
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - nginx-config-prod:/etc/nginx/conf.d
+      - nginx-logs-prod:/var/log/nginx
+      - certbot-data:/etc/letsencrypt
+      - certbot-config:/var/www/certbot
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: '512M'
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '-', 'http://localhost/health']
+      interval: '30s'
+      timeout: '10s'
+      retries: 3
+      start_period: '30s'
+    restart: always
+    networks:
+      - frontend-network-prod
+      - backend-network-prod
+    depends_on:
+      - frontend
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  certbot:
+    image: certbot/certbot
+    container_name: molecule-platform-certbot-prod
+    volumes:
+      - certbot-data:/etc/letsencrypt
+      - certbot-config:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    restart: unless-stopped
+    depends_on:
+      - nginx
+
+volumes:
+  postgres-data-prod:
+    driver: local
+  redis-data-prod:
+    driver: local
+  molecule-data-prod:
+    driver: local
+  document-storage-prod:
+    driver: local
+  nginx-config-prod:
+    driver: local
+  nginx-logs-prod:
+    driver: local
+  certbot-data:
+    driver: local
+  certbot-config:
+    driver: local
+
+networks:
+  frontend-network-prod:
+    driver: bridge
+  backend-network-prod:
+    driver: bridge
+    internal: true
