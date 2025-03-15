@@ -1,0 +1,445 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template for Lambda functions for the Molecular Data Management and CRO Integration Platform
+
+Parameters:
+  EnvironmentName:
+    Description: Name of the environment (dev, staging, prod)
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+  
+  ProjectName:
+    Description: Name of the project
+    Type: String
+    Default: MoleculeFlow
+  
+  PythonRuntime:
+    Description: Python runtime version for Lambda functions
+    Type: String
+    Default: python3.10
+    AllowedValues: [python3.9, python3.10, python3.11]
+  
+  LambdaMemorySize:
+    Description: Memory allocation for Lambda functions in MB
+    Type: Number
+    Default: 1024
+    MinValue: 128
+    MaxValue: 10240
+  
+  LambdaTimeout:
+    Description: Timeout for Lambda functions in seconds
+    Type: Number
+    Default: 300
+    MinValue: 3
+    MaxValue: 900
+  
+  CSVProcessorMemorySize:
+    Description: Memory allocation for CSV processor Lambda in MB
+    Type: Number
+    Default: 2048
+    MinValue: 128
+    MaxValue: 10240
+  
+  CSVProcessorTimeout:
+    Description: Timeout for CSV processor Lambda in seconds
+    Type: Number
+    Default: 600
+    MinValue: 3
+    MaxValue: 900
+  
+  AIIntegrationMemorySize:
+    Description: Memory allocation for AI integration Lambda in MB
+    Type: Number
+    Default: 2048
+    MinValue: 128
+    MaxValue: 10240
+  
+  AIIntegrationTimeout:
+    Description: Timeout for AI integration Lambda in seconds
+    Type: Number
+    Default: 600
+    MinValue: 3
+    MaxValue: 900
+  
+  DocumentProcessorMemorySize:
+    Description: Memory allocation for document processor Lambda in MB
+    Type: Number
+    Default: 1024
+    MinValue: 128
+    MaxValue: 10240
+  
+  DocumentProcessorTimeout:
+    Description: Timeout for document processor Lambda in seconds
+    Type: Number
+    Default: 300
+    MinValue: 3
+    MaxValue: 900
+  
+  NotificationMemorySize:
+    Description: Memory allocation for notification Lambda in MB
+    Type: Number
+    Default: 512
+    MinValue: 128
+    MaxValue: 10240
+  
+  NotificationTimeout:
+    Description: Timeout for notification Lambda in seconds
+    Type: Number
+    Default: 60
+    MinValue: 3
+    MaxValue: 900
+  
+  APIGatewayProcessorMemorySize:
+    Description: Memory allocation for API Gateway processor Lambda in MB
+    Type: Number
+    Default: 1024
+    MinValue: 128
+    MaxValue: 10240
+  
+  APIGatewayProcessorTimeout:
+    Description: Timeout for API Gateway processor Lambda in seconds
+    Type: Number
+    Default: 30
+    MinValue: 3
+    MaxValue: 900
+  
+  S3BucketName:
+    Description: S3 bucket name for Lambda function code
+    Type: String
+  
+  S3KeyPrefix:
+    Description: S3 key prefix for Lambda function code
+    Type: String
+    Default: lambda
+  
+  LogRetentionInDays:
+    Description: Number of days to retain Lambda function logs
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
+  
+  VpcId:
+    Description: VPC ID for Lambda functions
+    Type: String
+  
+  SubnetIds:
+    Description: Comma-separated list of subnet IDs for Lambda functions
+    Type: CommaDelimitedList
+  
+  SecurityGroupIds:
+    Description: Comma-separated list of security group IDs for Lambda functions
+    Type: CommaDelimitedList
+  
+  DatabaseSecretArn:
+    Description: ARN of the Secrets Manager secret containing database credentials
+    Type: String
+  
+  AIEngineApiKey:
+    Description: API key for the AI prediction engine
+    Type: String
+    NoEcho: true
+  
+  AIEngineEndpoint:
+    Description: Endpoint URL for the AI prediction engine
+    Type: String
+  
+  DocuSignIntegrationKey:
+    Description: Integration key for DocuSign API
+    Type: String
+    NoEcho: true
+  
+  DocuSignAccountId:
+    Description: DocuSign account ID
+    Type: String
+  
+  EnableXRay:
+    Description: Enable AWS X-Ray tracing for Lambda functions
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+Conditions:
+  EnableXRayCondition: !Equals [!Ref EnableXRay, 'true']
+
+Resources:
+  # IAM Role for Lambda functions
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [!Ref ProjectName, 'lambda-execution-role', !Ref EnvironmentName]]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: LambdaS3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${S3BucketName}
+                  - !Sub arn:aws:s3:::${S3BucketName}/*
+        - PolicyName: LambdaSecretsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DatabaseSecretArn
+        - PolicyName: LambdaSQSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: '*'
+
+  # CSV Processor Lambda
+  CSVProcessorLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Join ['-', [!Ref ProjectName, 'csv-processor', !Ref EnvironmentName]]
+      Handler: app.tasks.csv_processing.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Join ['/', [!Ref S3KeyPrefix, 'csv_processor.zip']]
+      Runtime: !Ref PythonRuntime
+      MemorySize: !Ref CSVProcessorMemorySize
+      Timeout: !Ref CSVProcessorTimeout
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref EnvironmentName
+          DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
+          S3_BUCKET_NAME: !Ref S3BucketName
+      VpcConfig:
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref SubnetIds
+      TracingConfig:
+        Mode: !If [EnableXRayCondition, Active, PassThrough]
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # AI Integration Lambda
+  AIIntegrationLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Join ['-', [!Ref ProjectName, 'ai-integration', !Ref EnvironmentName]]
+      Handler: app.tasks.ai_predictions.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Join ['/', [!Ref S3KeyPrefix, 'ai_integration.zip']]
+      Runtime: !Ref PythonRuntime
+      MemorySize: !Ref AIIntegrationMemorySize
+      Timeout: !Ref AIIntegrationTimeout
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref EnvironmentName
+          DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
+          AI_ENGINE_API_KEY: !Ref AIEngineApiKey
+          AI_ENGINE_ENDPOINT: !Ref AIEngineEndpoint
+      VpcConfig:
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref SubnetIds
+      TracingConfig:
+        Mode: !If [EnableXRayCondition, Active, PassThrough]
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Document Processor Lambda
+  DocumentProcessorLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Join ['-', [!Ref ProjectName, 'document-processor', !Ref EnvironmentName]]
+      Handler: app.tasks.document_processing.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Join ['/', [!Ref S3KeyPrefix, 'document_processor.zip']]
+      Runtime: !Ref PythonRuntime
+      MemorySize: !Ref DocumentProcessorMemorySize
+      Timeout: !Ref DocumentProcessorTimeout
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref EnvironmentName
+          DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
+          S3_BUCKET_NAME: !Ref S3BucketName
+          DOCUSIGN_INTEGRATION_KEY: !Ref DocuSignIntegrationKey
+          DOCUSIGN_ACCOUNT_ID: !Ref DocuSignAccountId
+      VpcConfig:
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref SubnetIds
+      TracingConfig:
+        Mode: !If [EnableXRayCondition, Active, PassThrough]
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Notification Lambda
+  NotificationLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Join ['-', [!Ref ProjectName, 'notification', !Ref EnvironmentName]]
+      Handler: app.tasks.notification.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Join ['/', [!Ref S3KeyPrefix, 'notification.zip']]
+      Runtime: !Ref PythonRuntime
+      MemorySize: !Ref NotificationMemorySize
+      Timeout: !Ref NotificationTimeout
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref EnvironmentName
+          DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
+      VpcConfig:
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref SubnetIds
+      TracingConfig:
+        Mode: !If [EnableXRayCondition, Active, PassThrough]
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # API Gateway Processor Lambda
+  APIGatewayProcessorLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Join ['-', [!Ref ProjectName, 'api-gateway-processor', !Ref EnvironmentName]]
+      Handler: app.api.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Join ['/', [!Ref S3KeyPrefix, 'api_gateway_processor.zip']]
+      Runtime: !Ref PythonRuntime
+      MemorySize: !Ref APIGatewayProcessorMemorySize
+      Timeout: !Ref APIGatewayProcessorTimeout
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref EnvironmentName
+          DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
+      VpcConfig:
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref SubnetIds
+      TracingConfig:
+        Mode: !If [EnableXRayCondition, Active, PassThrough]
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # CloudWatch Log Groups
+  CSVProcessorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${CSVProcessorLambda}
+      RetentionInDays: !Ref LogRetentionInDays
+
+  AIIntegrationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AIIntegrationLambda}
+      RetentionInDays: !Ref LogRetentionInDays
+
+  DocumentProcessorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${DocumentProcessorLambda}
+      RetentionInDays: !Ref LogRetentionInDays
+
+  NotificationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${NotificationLambda}
+      RetentionInDays: !Ref LogRetentionInDays
+
+  APIGatewayProcessorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${APIGatewayProcessorLambda}
+      RetentionInDays: !Ref LogRetentionInDays
+
+  # Lambda Permissions
+  S3EventPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CSVProcessorLambda
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub arn:aws:s3:::${S3BucketName}
+
+  SQSEventPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref AIIntegrationLambda
+      Principal: sqs.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+
+Outputs:
+  CSVProcessorLambdaArn:
+    Description: ARN of the CSV processor Lambda function
+    Value: !GetAtt CSVProcessorLambda.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-CSVProcessorLambdaArn
+
+  AIIntegrationLambdaArn:
+    Description: ARN of the AI integration Lambda function
+    Value: !GetAtt AIIntegrationLambda.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-AIIntegrationLambdaArn
+
+  DocumentProcessorLambdaArn:
+    Description: ARN of the document processor Lambda function
+    Value: !GetAtt DocumentProcessorLambda.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-DocumentProcessorLambdaArn
+
+  NotificationLambdaArn:
+    Description: ARN of the notification Lambda function
+    Value: !GetAtt NotificationLambda.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-NotificationLambdaArn
+
+  APIGatewayProcessorLambdaArn:
+    Description: ARN of the API Gateway processor Lambda function
+    Value: !GetAtt APIGatewayProcessorLambda.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-APIGatewayProcessorLambdaArn
+
+  LambdaExecutionRoleArn:
+    Description: ARN of the Lambda execution IAM role
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-LambdaExecutionRoleArn
