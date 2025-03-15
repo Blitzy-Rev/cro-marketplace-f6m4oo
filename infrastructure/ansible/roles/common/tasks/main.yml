@@ -1,0 +1,479 @@
+---
+# Common server setup tasks for Molecular Data Management and CRO Integration Platform
+# This role handles core system setup, Docker installation, security hardening, and monitoring configuration
+
+- name: System Setup
+  block:
+    - name: Update package cache (Debian)
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: "ansible_os_family == 'Debian'"
+
+    - name: Update package cache (RedHat)
+      yum:
+        update_cache: yes
+      when: "ansible_os_family == 'RedHat'"
+
+    - name: Install essential packages (Debian)
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - software-properties-common
+          - python3-pip
+          - python3-setuptools
+          - vim
+          - htop
+          - net-tools
+          - unzip
+          - jq
+          - git
+          - fail2ban
+          - ufw
+        state: present
+      when: "ansible_os_family == 'Debian'"
+
+    - name: Install essential packages (RedHat)
+      yum:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - python3-pip
+          - python3-setuptools
+          - vim
+          - htop
+          - net-tools
+          - unzip
+          - jq
+          - git
+          - fail2ban
+          - firewalld
+        state: present
+      when: "ansible_os_family == 'RedHat'"
+
+    - name: Set timezone to UTC
+      timezone:
+        name: UTC
+
+    - name: Configure hostname
+      hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: Create application user
+      user:
+        name: molecule-app
+        comment: Molecular Platform Application User
+        shell: /bin/bash
+        create_home: yes
+        system: yes
+
+    - name: Create application directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: molecule-app
+        group: molecule-app
+        mode: '0755'
+      loop:
+        - "{{ app_base_dir }}"
+        - "{{ app_base_dir }}/config"
+        - "{{ app_base_dir }}/logs"
+        - "{{ app_base_dir }}/data"
+        - "{{ app_base_dir }}/deployments"
+  tags:
+    - system
+    - setup
+
+- name: Docker Setup
+  block:
+    - name: Add Docker GPG key (Debian)
+      apt_key:
+        url: https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg
+        state: present
+      when: "ansible_os_family == 'Debian'"
+
+    - name: Add Docker repository (Debian)
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/{{ ansible_distribution | lower }} {{ ansible_distribution_release }} stable
+        state: present
+      when: "ansible_os_family == 'Debian'"
+
+    - name: Add Docker repository (RedHat)
+      yum_repository:
+        name: docker-ce
+        description: Docker CE Repository
+        baseurl: https://download.docker.com/linux/centos/{{ ansible_distribution_major_version }}/$basearch/stable
+        gpgcheck: yes
+        gpgkey: https://download.docker.com/linux/centos/gpg
+      when: "ansible_os_family == 'RedHat'"
+
+    - name: Install Docker packages (Debian)
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+      when: "ansible_os_family == 'Debian'"
+
+    - name: Install Docker packages (RedHat)
+      yum:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+      when: "ansible_os_family == 'RedHat'"
+
+    - name: Create Docker configuration directory
+      file:
+        path: /etc/docker
+        state: directory
+        mode: '0755'
+
+    - name: Configure Docker daemon
+      template:
+        src: ../templates/docker-daemon.json.j2
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart Docker
+
+    - name: Create Docker network
+      community.docker.docker_network:
+        name: molecule-network
+        driver: bridge
+        ipam_config:
+          - subnet: 172.20.0.0/16
+
+    - name: Add molecule-app user to Docker group
+      user:
+        name: molecule-app
+        groups: docker
+        append: yes
+
+    - name: Enable and start Docker service
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Install Docker Compose
+      pip:
+        name: docker-compose
+        state: present
+
+    - name: Install Docker security scanning tools
+      pip:
+        name:
+          - trivy
+          - docker-bench-security
+        state: present
+  tags:
+    - docker
+    - setup
+
+- name: Security Configuration
+  block:
+    - name: Configure SSH hardening
+      template:
+        src: ../templates/sshd_config.j2
+        dest: /etc/ssh/sshd_config
+        owner: root
+        group: root
+        mode: '0600'
+      notify: Restart SSH
+
+    - name: Configure fail2ban
+      template:
+        src: ../templates/fail2ban.local.j2
+        dest: /etc/fail2ban/jail.local
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart fail2ban
+
+    - name: Configure firewall (UFW)
+      ufw:
+        state: enabled
+        policy: deny
+        logging: on
+      when: "ansible_os_family == 'Debian'"
+
+    - name: Configure firewall (firewalld)
+      service:
+        name: firewalld
+        state: started
+        enabled: yes
+      when: "ansible_os_family == 'RedHat'"
+
+    - name: Allow SSH through firewall (UFW)
+      ufw:
+        rule: allow
+        name: OpenSSH
+      when: "ansible_os_family == 'Debian'"
+
+    - name: Allow SSH through firewall (firewalld)
+      firewalld:
+        service: ssh
+        permanent: yes
+        state: enabled
+      when: "ansible_os_family == 'RedHat'"
+
+    - name: Allow HTTP through firewall (UFW)
+      ufw:
+        rule: allow
+        port: '80'
+        proto: tcp
+      when: "ansible_os_family == 'Debian' and (inventory_hostname in groups['frontend_servers'] | default([]))"
+
+    - name: Allow HTTPS through firewall (UFW)
+      ufw:
+        rule: allow
+        port: '443'
+        proto: tcp
+      when: "ansible_os_family == 'Debian' and (inventory_hostname in groups['frontend_servers'] | default([]))"
+
+    - name: Allow HTTP through firewall (firewalld)
+      firewalld:
+        service: http
+        permanent: yes
+        state: enabled
+      when: "ansible_os_family == 'RedHat' and (inventory_hostname in groups['frontend_servers'] | default([]))"
+
+    - name: Allow HTTPS through firewall (firewalld)
+      firewalld:
+        service: https
+        permanent: yes
+        state: enabled
+      when: "ansible_os_family == 'RedHat' and (inventory_hostname in groups['frontend_servers'] | default([]))"
+
+    - name: Configure system limits
+      template:
+        src: ../templates/limits.conf.j2
+        dest: /etc/security/limits.d/molecule-app.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Configure sysctl for security
+      template:
+        src: ../templates/sysctl-security.conf.j2
+        dest: /etc/sysctl.d/99-security.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Apply sysctl settings
+  tags:
+    - security
+    - hardening
+
+- name: AWS Integration
+  block:
+    - name: Install AWS CLI
+      pip:
+        name: awscli
+        state: present
+
+    - name: Create AWS config directory
+      file:
+        path: /home/molecule-app/.aws
+        state: directory
+        owner: molecule-app
+        group: molecule-app
+        mode: '0700'
+
+    - name: Configure AWS credentials
+      template:
+        src: ../templates/aws-credentials.j2
+        dest: /home/molecule-app/.aws/credentials
+        owner: molecule-app
+        group: molecule-app
+        mode: '0600'
+
+    - name: Configure AWS region
+      template:
+        src: ../templates/aws-config.j2
+        dest: /home/molecule-app/.aws/config
+        owner: molecule-app
+        group: molecule-app
+        mode: '0644'
+
+    - name: Install SSM agent (Debian)
+      apt:
+        deb: https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_amd64/amazon-ssm-agent.deb
+      when: "ansible_os_family == 'Debian' and install_ssm_agent | default(true)"
+
+    - name: Install SSM agent (RedHat)
+      yum:
+        name: https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
+        state: present
+      when: "ansible_os_family == 'RedHat' and install_ssm_agent | default(true)"
+
+    - name: Enable and start SSM agent
+      service:
+        name: amazon-ssm-agent
+        state: started
+        enabled: yes
+      when: install_ssm_agent | default(true)
+
+    - name: Configure ECR login helper
+      pip:
+        name: amazon-ecr-credential-helper
+        state: present
+
+    - name: Create Docker config directory for molecule-app
+      file:
+        path: /home/molecule-app/.docker
+        state: directory
+        owner: molecule-app
+        group: molecule-app
+        mode: '0700'
+
+    - name: Configure Docker ECR credentials helper
+      template:
+        src: ../templates/docker-config.j2
+        dest: /home/molecule-app/.docker/config.json
+        owner: molecule-app
+        group: molecule-app
+        mode: '0600'
+  tags:
+    - aws
+    - integration
+  when: aws_integration | default(true)
+
+- name: Monitoring Setup
+  block:
+    - name: Install CloudWatch agent (Debian)
+      apt:
+        deb: https://s3.amazonaws.com/amazoncloudwatch-agent/debian/amd64/latest/amazon-cloudwatch-agent.deb
+      when: "ansible_os_family == 'Debian' and install_cloudwatch_agent | default(true)"
+
+    - name: Install CloudWatch agent (RedHat)
+      yum:
+        name: https://s3.amazonaws.com/amazoncloudwatch-agent/redhat/amd64/latest/amazon-cloudwatch-agent.rpm
+        state: present
+      when: "ansible_os_family == 'RedHat' and install_cloudwatch_agent | default(true)"
+
+    - name: Create CloudWatch configuration directory
+      file:
+        path: /opt/aws/amazon-cloudwatch-agent/etc
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: install_cloudwatch_agent | default(true)
+
+    - name: Configure CloudWatch agent
+      template:
+        src: ../templates/cloudwatch-config.json.j2
+        dest: /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart CloudWatch agent
+      when: install_cloudwatch_agent | default(true)
+
+    - name: Enable and start CloudWatch agent
+      service:
+        name: amazon-cloudwatch-agent
+        state: started
+        enabled: yes
+      when: install_cloudwatch_agent | default(true)
+
+    - name: Install Prometheus Node Exporter (Debian)
+      apt:
+        name: prometheus-node-exporter
+        state: present
+      when: "ansible_os_family == 'Debian' and install_node_exporter | default(true)"
+
+    - name: Download Node Exporter (RedHat)
+      get_url:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.5.0/node_exporter-1.5.0.linux-amd64.tar.gz
+        dest: /tmp/node_exporter.tar.gz
+      when: "ansible_os_family == 'RedHat' and install_node_exporter | default(true)"
+
+    - name: Extract Node Exporter (RedHat)
+      unarchive:
+        src: /tmp/node_exporter.tar.gz
+        dest: /tmp
+        remote_src: yes
+      when: "ansible_os_family == 'RedHat' and install_node_exporter | default(true)"
+
+    - name: Install Node Exporter binary (RedHat)
+      copy:
+        src: /tmp/node_exporter-1.5.0.linux-amd64/node_exporter
+        dest: /usr/local/bin/node_exporter
+        mode: '0755'
+        remote_src: yes
+      when: "ansible_os_family == 'RedHat' and install_node_exporter | default(true)"
+
+    - name: Configure Node Exporter service (RedHat)
+      template:
+        src: ../templates/node-exporter.service.j2
+        dest: /etc/systemd/system/node-exporter.service
+        owner: root
+        group: root
+        mode: '0644'
+      when: "ansible_os_family == 'RedHat' and install_node_exporter | default(true)"
+
+    - name: Enable and start Node Exporter
+      service:
+        name: "{{ 'prometheus-node-exporter' if ansible_os_family == 'Debian' else 'node-exporter' }}"
+        state: started
+        enabled: yes
+      when: install_node_exporter | default(true)
+
+    - name: Create Prometheus targets directory
+      file:
+        path: /etc/prometheus/targets
+        state: directory
+        owner: prometheus
+        group: prometheus
+        mode: '0755'
+      when: install_prometheus | default(false)
+
+    - name: Configure log rotation
+      template:
+        src: ../templates/logrotate-app.j2
+        dest: /etc/logrotate.d/molecule-app
+        owner: root
+        group: root
+        mode: '0644'
+  tags:
+    - monitoring
+    - setup
+
+# Handlers
+handlers:
+  - name: Restart Docker
+    service:
+      name: docker
+      state: restarted
+
+  - name: Restart SSH
+    service:
+      name: sshd
+      state: restarted
+
+  - name: Restart fail2ban
+    service:
+      name: fail2ban
+      state: restarted
+
+  - name: Apply sysctl settings
+    command: sysctl --system
+
+  - name: Restart CloudWatch agent
+    service:
+      name: amazon-cloudwatch-agent
+      state: restarted
