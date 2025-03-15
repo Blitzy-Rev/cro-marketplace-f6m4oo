@@ -1,0 +1,160 @@
+name: Infrastructure Validation
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'infrastructure/**'
+      - 'deployment/**'
+      - '.github/workflows/infrastructure_validation.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'infrastructure/**'
+      - 'deployment/**'
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  terraform_validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: '1.5.0'
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+      
+      - name: Terraform Init - Dev
+        working-directory: infrastructure/terraform/environments/dev
+        run: terraform init -backend=false
+      
+      - name: Terraform Validate - Dev
+        working-directory: infrastructure/terraform/environments/dev
+        run: terraform validate
+      
+      - name: Terraform Format Check
+        working-directory: infrastructure/terraform
+        run: terraform fmt -check -recursive
+      
+      - name: Terraform Init - Staging
+        working-directory: infrastructure/terraform/environments/staging
+        run: terraform init -backend=false
+      
+      - name: Terraform Validate - Staging
+        working-directory: infrastructure/terraform/environments/staging
+        run: terraform validate
+      
+      - name: Terraform Init - Prod
+        working-directory: infrastructure/terraform/environments/prod
+        run: terraform init -backend=false
+      
+      - name: Terraform Validate - Prod
+        working-directory: infrastructure/terraform/environments/prod
+        run: terraform validate
+      
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: infrastructure/terraform
+          format: sarif
+          output_file: tfsec.sarif
+      
+      - name: Upload tfsec SARIF file
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: tfsec.sarif
+          category: tfsec
+
+  cloudformation_validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: Install cfn-lint and cfn_nag
+        run: pip install cfn-lint && gem install cfn-nag
+      
+      - name: Run cfn-lint
+        run: cfn-lint infrastructure/cloudformation/*.yml
+      
+      - name: Run cfn_nag
+        run: find infrastructure/cloudformation -name '*.yml' -exec cfn_nag_scan --input-path {} \;
+      
+      - name: Run checkov on CloudFormation
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infrastructure/cloudformation
+          framework: cloudformation
+          output_format: sarif
+          output_file: checkov-cfn.sarif
+          soft_fail: true
+      
+      - name: Upload checkov SARIF file
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: checkov-cfn.sarif
+          category: checkov-cfn
+
+  kubernetes_validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup kubeval
+        run: |
+          wget https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
+          tar xf kubeval-linux-amd64.tar.gz
+          sudo cp kubeval /usr/local/bin
+      
+      - name: Run kubeval
+        run: find deployment/kubernetes -name '*.yaml' -exec kubeval {} \;
+      
+      - name: Install kube-score
+        run: |
+          wget https://github.com/zegl/kube-score/releases/download/v1.14.0/kube-score_1.14.0_linux_amd64
+          chmod +x kube-score_1.14.0_linux_amd64
+          sudo mv kube-score_1.14.0_linux_amd64 /usr/local/bin/kube-score
+      
+      - name: Run kube-score
+        run: find deployment/kubernetes -name '*.yaml' -exec kube-score score {} \;
+      
+      - name: Run checkov on Kubernetes
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: deployment/kubernetes
+          framework: kubernetes
+          output_format: sarif
+          output_file: checkov-k8s.sarif
+          soft_fail: true
+      
+      - name: Upload checkov SARIF file
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: checkov-k8s.sarif
+          category: checkov-k8s
+
+  ansible_lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: Install ansible-lint
+        run: pip install ansible-lint
+      
+      - name: Run ansible-lint
+        run: ansible-lint infrastructure/ansible/playbooks/*.yml
