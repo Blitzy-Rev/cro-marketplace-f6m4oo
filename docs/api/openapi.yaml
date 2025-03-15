@@ -1,0 +1,2143 @@
+openapi: 3.0.3
+info:
+  title: Molecular Data Management and CRO Integration Platform API
+  description: API for managing molecular data, libraries, CRO submissions, and experimental results in the drug discovery workflow
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: api-support@moleculeflow.com
+    url: https://docs.moleculeflow.com
+  license:
+    name: Proprietary
+    url: https://www.moleculeflow.com/terms
+servers:
+  - url: https://api.moleculeflow.com/api/v1
+    description: Production server
+  - url: https://staging-api.moleculeflow.com/api/v1
+    description: Staging server
+  - url: http://localhost:8000/api/v1
+    description: Local development server
+tags:
+  - name: authentication
+    description: Authentication and user management operations
+  - name: molecules
+    description: Molecule management operations
+  - name: libraries
+    description: Library management operations
+  - name: cro
+    description: CRO service management operations
+  - name: submissions
+    description: Submission management operations
+  - name: documents
+    description: Document management operations
+  - name: results
+    description: Result management operations
+  - name: predictions
+    description: AI prediction operations
+  - name: health
+    description: Health check operations
+paths:
+  /health:
+    get:
+      tags:
+        - health
+      summary: Health check endpoint
+      description: Check if the API is running and healthy
+      operationId: checkHealth
+      responses:
+        '200':
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /auth/login:
+    post:
+      tags:
+        - authentication
+      summary: Login to the system
+      description: Authenticate a user and return access and refresh tokens
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Token'
+        '401':
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /auth/register:
+    post:
+      tags:
+        - authentication
+      summary: Register a new user
+      description: Register a new user in the system
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      responses:
+        '200':
+          description: Registration successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseMsg'
+        '400':
+          description: Invalid registration data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /auth/refresh:
+    post:
+      tags:
+        - authentication
+      summary: Refresh authentication tokens
+      description: Refresh authentication tokens using a refresh token
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: Token refresh successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Token'
+        '401':
+          description: Invalid refresh token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /auth/change-password:
+    post:
+      tags:
+        - authentication
+      summary: Change user password
+      description: Change the password for the authenticated user
+      operationId: changePassword
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordChange'
+      responses:
+        '200':
+          description: Password changed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseMsg'
+        '400':
+          description: Invalid password data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /molecules:
+    post:
+      tags:
+        - molecules
+      summary: Create a new molecule
+      description: Create a new molecule from SMILES string
+      operationId: createMolecule
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoleculeCreate'
+      responses:
+        '201':
+          description: Molecule created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Molecule'
+        '400':
+          description: Invalid molecule data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+    get:
+      tags:
+        - molecules
+      summary: List molecules
+      description: List molecules with pagination
+      operationId: listMolecules
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: skip
+          in: query
+          description: Number of records to skip
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: limit
+          in: query
+          description: Maximum number of records to return
+          required: false
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 1000
+      responses:
+        '200':
+          description: List of molecules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MoleculeList'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /molecules/{molecule_id}:
+    get:
+      tags:
+        - molecules
+      summary: Get a molecule by ID
+      description: Get detailed information about a specific molecule
+      operationId: getMolecule
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: molecule_id
+          in: path
+          description: ID of the molecule to retrieve
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Molecule details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MoleculeDetail'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '404':
+          description: Molecule not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+    put:
+      tags:
+        - molecules
+      summary: Update a molecule
+      description: Update an existing molecule
+      operationId: updateMolecule
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: molecule_id
+          in: path
+          description: ID of the molecule to update
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoleculeUpdate'
+      responses:
+        '200':
+          description: Molecule updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Molecule'
+        '400':
+          description: Invalid molecule data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '404':
+          description: Molecule not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+    delete:
+      tags:
+        - molecules
+      summary: Delete a molecule
+      description: Delete an existing molecule
+      operationId: deleteMolecule
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: molecule_id
+          in: path
+          description: ID of the molecule to delete
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Molecule deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '404':
+          description: Molecule not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /molecules/filter:
+    post:
+      tags:
+        - molecules
+      summary: Filter molecules
+      description: Filter molecules based on various criteria
+      operationId: filterMolecules
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: skip
+          in: query
+          description: Number of records to skip
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: limit
+          in: query
+          description: Maximum number of records to return
+          required: false
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 1000
+        - name: sort_by
+          in: query
+          description: Property to sort by
+          required: false
+          schema:
+            type: string
+        - name: descending
+          in: query
+          description: Sort in descending order
+          required: false
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoleculeFilter'
+      responses:
+        '200':
+          description: Filtered molecules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MoleculeList'
+        '400':
+          description: Invalid filter criteria
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /molecules/upload-csv:
+    post:
+      tags:
+        - molecules
+      summary: Upload CSV file
+      description: Upload a CSV file containing molecular data
+      operationId: uploadCSV
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: CSV file containing molecular data
+              required:
+                - file
+      responses:
+        '202':
+          description: CSV file accepted for processing
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  file_url:
+                    type: string
+                    example: uploads/molecules/2023-09-15/user123_file.csv
+                  filename:
+                    type: string
+                    example: molecules.csv
+                  size:
+                    type: integer
+                    example: 1024
+        '400':
+          description: Invalid CSV file
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /molecules/csv-preview:
+    get:
+      tags:
+        - molecules
+      summary: Get CSV preview
+      description: Get a preview of CSV data for column mapping
+      operationId: getCSVPreview
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: file_url
+          in: query
+          description: URL of the uploaded CSV file
+          required: true
+          schema:
+            type: string
+        - name: num_rows
+          in: query
+          description: Number of rows to preview
+          required: false
+          schema:
+            type: integer
+            default: 5
+            minimum: 1
+            maximum: 20
+      responses:
+        '200':
+          description: CSV preview data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  headers:
+                    type: array
+                    items:
+                      type: string
+                    example: ['SMILES', 'MW', 'LogP', 'Activity']
+                  preview_data:
+                    type: array
+                    items:
+                      type: array
+                      items:
+                        type: string
+                    example: [['CC(C)CCO', '88.15', '1.2', '4.5'], ['c1ccccc1', '78.11', '2.1', '3.2']]
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '404':
+          description: CSV file not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /molecules/process-csv:
+    post:
+      tags:
+        - molecules
+      summary: Process CSV file
+      description: Process a previously uploaded CSV file
+      operationId: processCSV
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoleculeCSVMapping'
+      responses:
+        '200':
+          description: CSV processing results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  total_rows:
+                    type: integer
+                    example: 100
+                  processed_rows:
+                    type: integer
+                    example: 98
+                  failed_rows:
+                    type: integer
+                    example: 2
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        row:
+                          type: integer
+                        error:
+                          type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '404':
+          description: CSV file not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /molecules/{molecule_id}/predict:
+    post:
+      tags:
+        - molecules
+        - predictions
+      summary: Predict properties for a molecule
+      description: Request property predictions from AI engine for a molecule
+      operationId: predictProperties
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: molecule_id
+          in: path
+          description: ID of the molecule
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: wait_for_results
+          in: query
+          description: Wait for prediction results
+          required: false
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                properties:
+                  type: array
+                  items:
+                    type: string
+                  description: Properties to predict
+                  example: ['solubility', 'permeability', 'toxicity']
+      responses:
+        '200':
+          description: Prediction results or job information
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/PredictionResults'
+                  - $ref: '#/components/schemas/PredictionJob'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '404':
+          description: Molecule not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /molecules/batch-predict:
+    post:
+      tags:
+        - molecules
+        - predictions
+      summary: Batch predict properties
+      description: Request property predictions for multiple molecules
+      operationId: batchPredictProperties
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                molecule_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  description: IDs of molecules to predict properties for
+                properties:
+                  type: array
+                  items:
+                    type: string
+                  description: Properties to predict
+                  example: ['solubility', 'permeability', 'toxicity']
+              required:
+                - molecule_ids
+      responses:
+        '202':
+          description: Batch prediction job started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PredictionJob'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /libraries:
+    get:
+      tags:
+        - libraries
+      summary: List libraries
+      description: List molecule libraries with pagination
+      operationId: listLibraries
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: skip
+          in: query
+          description: Number of records to skip
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: limit
+          in: query
+          description: Maximum number of records to return
+          required: false
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 1000
+      responses:
+        '200':
+          description: List of libraries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryList'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+    post:
+      tags:
+        - libraries
+      summary: Create a library
+      description: Create a new molecule library
+      operationId: createLibrary
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LibraryCreate'
+      responses:
+        '201':
+          description: Library created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Library'
+        '400':
+          description: Invalid library data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /submissions:
+    get:
+      tags:
+        - submissions
+      summary: List submissions
+      description: List submissions with optional filtering
+      operationId: listSubmissions
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: skip
+          in: query
+          description: Number of records to skip
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: limit
+          in: query
+          description: Maximum number of records to return
+          required: false
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 1000
+      responses:
+        '200':
+          description: List of submissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionList'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+    post:
+      tags:
+        - submissions
+      summary: Create a submission
+      description: Create a new submission to a CRO
+      operationId: createSubmission
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmissionCreate'
+      responses:
+        '201':
+          description: Submission created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Submission'
+        '400':
+          description: Invalid submission data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /submissions/{submission_id}:
+    get:
+      tags:
+        - submissions
+      summary: Get a submission
+      description: Get detailed information about a specific submission
+      operationId: getSubmission
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: submission_id
+          in: path
+          description: ID of the submission to retrieve
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Submission details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Submission'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '404':
+          description: Submission not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+    put:
+      tags:
+        - submissions
+      summary: Update a submission
+      description: Update an existing submission
+      operationId: updateSubmission
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: submission_id
+          in: path
+          description: ID of the submission to update
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmissionUpdate'
+      responses:
+        '200':
+          description: Submission updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Submission'
+        '400':
+          description: Invalid submission data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '404':
+          description: Submission not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /submissions/{submission_id}/actions:
+    post:
+      tags:
+        - submissions
+      summary: Process submission action
+      description: Process an action on a submission (approve, reject, etc.)
+      operationId: processSubmissionAction
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: submission_id
+          in: path
+          description: ID of the submission
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmissionAction'
+      responses:
+        '200':
+          description: Action processed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Submission approved successfully
+        '400':
+          description: Invalid action
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '404':
+          description: Submission not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /documents:
+    get:
+      tags:
+        - documents
+      summary: List documents
+      description: List documents with pagination
+      operationId: listDocuments
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: submission_id
+          in: query
+          description: Filter by submission ID
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: document_type
+          in: query
+          description: Filter by document type
+          required: false
+          schema:
+            type: string
+        - name: skip
+          in: query
+          description: Number of records to skip
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: limit
+          in: query
+          description: Maximum number of records to return
+          required: false
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 1000
+      responses:
+        '200':
+          description: List of documents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentList'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+    post:
+      tags:
+        - documents
+      summary: Upload a document
+      description: Upload a new document
+      operationId: uploadDocument
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Document file
+                submission_id:
+                  type: string
+                  format: uuid
+                  description: ID of the submission this document belongs to
+                document_type:
+                  type: string
+                  description: Type of document
+                  example: NDA
+                name:
+                  type: string
+                  description: Document name
+                  example: Non-Disclosure Agreement
+              required:
+                - file
+                - document_type
+      responses:
+        '201':
+          description: Document uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        '400':
+          description: Invalid document data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+  /results:
+    get:
+      tags:
+        - results
+      summary: List results
+      description: List experimental results with pagination
+      operationId: listResults
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: submission_id
+          in: query
+          description: Filter by submission ID
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: molecule_id
+          in: query
+          description: Filter by molecule ID
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: skip
+          in: query
+          description: Number of records to skip
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: limit
+          in: query
+          description: Maximum number of records to return
+          required: false
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 1000
+      responses:
+        '200':
+          description: List of results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultList'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+    post:
+      tags:
+        - results
+      summary: Upload results
+      description: Upload experimental results for a submission
+      operationId: uploadResults
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Results CSV file
+                submission_id:
+                  type: string
+                  format: uuid
+                  description: ID of the submission these results belong to
+                name:
+                  type: string
+                  description: Results name
+                  example: Binding Assay Results
+                notes:
+                  type: string
+                  description: Additional notes about the results
+              required:
+                - file
+                - submission_id
+      responses:
+        '202':
+          description: Results accepted for processing
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Results uploaded and being processed
+                  result_id:
+                    type: string
+                    format: uuid
+        '400':
+          description: Invalid results data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+        '404':
+          description: Submission not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseMsg'
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        version:
+          type: string
+          example: 1.0.0
+        timestamp:
+          type: string
+          format: date-time
+    TokenRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          format: email
+          example: user@example.com
+        password:
+          type: string
+          format: password
+          example: password123
+      required:
+        - username
+        - password
+    RefreshTokenRequest:
+      type: object
+      properties:
+        refresh_token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+      required:
+        - refresh_token
+    Token:
+      type: object
+      properties:
+        access_token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        refresh_token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        token_type:
+          type: string
+          example: bearer
+        mfa_required:
+          type: boolean
+          example: false
+    UserCreate:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          example: user@example.com
+        password:
+          type: string
+          format: password
+          example: password123
+        full_name:
+          type: string
+          example: John Smith
+        role:
+          type: string
+          enum: [admin, pharma_user, pharma_admin, cro_user, cro_admin]
+          example: pharma_user
+        organization:
+          type: string
+          example: PharmaCo
+      required:
+        - email
+        - password
+        - full_name
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        full_name:
+          type: string
+        role:
+          type: string
+        organization:
+          type: string
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    PasswordChange:
+      type: object
+      properties:
+        current_password:
+          type: string
+          format: password
+        new_password:
+          type: string
+          format: password
+      required:
+        - current_password
+        - new_password
+    Msg:
+      type: object
+      properties:
+        message:
+          type: string
+          example: Operation successful
+    ResponseMsg:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        message:
+          type: string
+          example: Operation completed successfully
+        data:
+          type: object
+    ErrorResponseMsg:
+      type: object
+      properties:
+        error_code:
+          type: string
+          example: INVALID_REQUEST
+        message:
+          type: string
+          example: Invalid request parameters
+        details:
+          type: object
+        status_code:
+          type: integer
+          example: 400
+    MoleculeBase:
+      type: object
+      properties:
+        smiles:
+          type: string
+          example: CC(C)CCO
+          description: SMILES representation of the molecule
+        inchi_key:
+          type: string
+          example: KFZMGEQAYNKOFK-UHFFFAOYSA-N
+          description: InChI key for the molecule
+        formula:
+          type: string
+          example: C5H12O
+          description: Molecular formula
+        molecular_weight:
+          type: number
+          format: float
+          example: 88.15
+          description: Molecular weight in g/mol
+        status:
+          type: string
+          example: available
+          description: Current status of the molecule
+        metadata:
+          type: object
+          description: Additional metadata for the molecule
+        properties:
+          type: array
+          items:
+            $ref: '#/components/schemas/MoleculePropertyCreate'
+          description: Molecular properties
+      required:
+        - smiles
+    MoleculeCreate:
+      allOf:
+        - $ref: '#/components/schemas/MoleculeBase'
+        - type: object
+          properties:
+            created_by:
+              type: string
+              format: uuid
+              description: ID of the user creating the molecule
+            library_ids:
+              type: array
+              items:
+                type: string
+                format: uuid
+              description: IDs of libraries to add the molecule to
+    MoleculeUpdate:
+      type: object
+      properties:
+        smiles:
+          type: string
+          example: CC(C)CCO
+          description: SMILES representation of the molecule
+        status:
+          type: string
+          example: testing
+          description: Current status of the molecule
+        metadata:
+          type: object
+          description: Additional metadata for the molecule
+        properties:
+          type: array
+          items:
+            $ref: '#/components/schemas/MoleculePropertyCreate'
+          description: Molecular properties to update
+        library_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: IDs of libraries to add the molecule to
+    Molecule:
+      allOf:
+        - $ref: '#/components/schemas/MoleculeBase'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+              description: Unique identifier for the molecule
+            created_by:
+              type: string
+              format: uuid
+              description: ID of the user who created the molecule
+            created_at:
+              type: string
+              format: date-time
+              description: Timestamp when the molecule was created
+            updated_at:
+              type: string
+              format: date-time
+              description: Timestamp when the molecule was last updated
+            properties:
+              type: array
+              items:
+                $ref: '#/components/schemas/MoleculeProperty'
+              description: Molecular properties
+            library_ids:
+              type: array
+              items:
+                type: string
+                format: uuid
+              description: IDs of libraries containing this molecule
+            structure_image:
+              type: string
+              format: uri
+              description: URL to the molecule structure image
+          required:
+            - id
+            - smiles
+            - created_at
+            - updated_at
+    MoleculeDetail:
+      allOf:
+        - $ref: '#/components/schemas/Molecule'
+        - type: object
+          properties:
+            predictions:
+              type: array
+              items:
+                type: object
+              description: AI-predicted properties
+            results:
+              type: array
+              items:
+                type: object
+              description: Experimental results
+            libraries:
+              type: array
+              items:
+                type: object
+              description: Libraries containing this molecule
+            submissions:
+              type: array
+              items:
+                type: object
+              description: Submissions including this molecule
+    MoleculeList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Molecule'
+        total:
+          type: integer
+          example: 100
+        page:
+          type: integer
+          example: 1
+        size:
+          type: integer
+          example: 10
+        pages:
+          type: integer
+          example: 10
+    MoleculePropertyCreate:
+      type: object
+      properties:
+        name:
+          type: string
+          example: activity
+          description: Name of the property
+        value:
+          oneOf:
+            - type: number
+            - type: string
+            - type: boolean
+          example: 4.5
+          description: Value of the property
+        units:
+          type: string
+          example: nM
+          description: Units of the property value
+        property_type:
+          type: string
+          enum: [NUMERIC, STRING, INTEGER, BOOLEAN]
+          example: NUMERIC
+          description: Data type of the property
+        source:
+          type: string
+          enum: [CALCULATED, IMPORTED, PREDICTED, EXPERIMENTAL]
+          example: IMPORTED
+          description: Source of the property value
+      required:
+        - name
+        - value
+        - property_type
+    MoleculeProperty:
+      allOf:
+        - $ref: '#/components/schemas/MoleculePropertyCreate'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+              description: Unique identifier for the property
+            molecule_id:
+              type: string
+              format: uuid
+              description: ID of the molecule this property belongs to
+            confidence:
+              type: number
+              format: float
+              minimum: 0
+              maximum: 1
+              example: 0.95
+              description: Confidence score for predicted properties
+          required:
+            - id
+            - molecule_id
+    MoleculeFilter:
+      type: object
+      properties:
+        smiles_contains:
+          type: string
+          description: SMILES substructure to search for
+        formula_contains:
+          type: string
+          description: Formula substring to search for
+        status:
+          type: string
+          description: Status to filter by
+        created_by:
+          type: string
+          format: uuid
+          description: Filter by creator ID
+        library_id:
+          type: string
+          format: uuid
+          description: Filter by library ID
+        property_ranges:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              min:
+                type: number
+              max:
+                type: number
+              equals:
+                oneOf:
+                  - type: number
+                  - type: string
+                  - type: boolean
+              contains:
+                type: string
+          description: Property value ranges to filter by
+    MoleculeCSVMapping:
+      type: object
+      properties:
+        file_url:
+          type: string
+          description: URL of the uploaded CSV file
+        column_mapping:
+          type: object
+          additionalProperties:
+            type: string
+          description: Mapping of CSV columns to molecule properties
+        has_header:
+          type: boolean
+          default: true
+          description: Whether the CSV file has a header row
+        delimiter:
+          type: string
+          default: ','
+          description: CSV delimiter character
+        library_id:
+          type: string
+          format: uuid
+          description: ID of the library to add molecules to
+      required:
+        - file_url
+        - column_mapping
+    PredictionJob:
+      type: object
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          description: Unique identifier for the prediction job
+        status:
+          type: string
+          enum: [queued, processing, completed, failed]
+          description: Current status of the prediction job
+        progress:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 100
+          description: Progress percentage of the prediction job
+        message:
+          type: string
+          description: Status message or error details
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the job was created
+        updated_at:
+          type: string
+          format: date-time
+          description: Timestamp when the job was last updated
+      required:
+        - job_id
+        - status
+    PredictionResults:
+      type: object
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          description: Unique identifier for the prediction job
+        status:
+          type: string
+          enum: [completed]
+          description: Status of the prediction job
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              molecule_id:
+                type: string
+                format: uuid
+              smiles:
+                type: string
+              predictions:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    property:
+                      type: string
+                    value:
+                      type: number
+                    units:
+                      type: string
+                    confidence:
+                      type: number
+                      format: float
+                      minimum: 0
+                      maximum: 1
+        model_name:
+          type: string
+          description: Name of the AI model used for predictions
+        model_version:
+          type: string
+          description: Version of the AI model used for predictions
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the job was created
+        completed_at:
+          type: string
+          format: date-time
+          description: Timestamp when the job was completed
+      required:
+        - job_id
+        - status
+        - results
+    LibraryCreate:
+      type: object
+      properties:
+        name:
+          type: string
+          example: High Potency Candidates
+          description: Name of the library
+        description:
+          type: string
+          example: Collection of high potency molecules for Project X
+          description: Description of the library
+        tags:
+          type: array
+          items:
+            type: string
+          description: Tags for categorizing the library
+        molecule_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: IDs of molecules to add to the library
+      required:
+        - name
+    Library:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the library
+        name:
+          type: string
+          description: Name of the library
+        description:
+          type: string
+          description: Description of the library
+        owner_id:
+          type: string
+          format: uuid
+          description: ID of the user who owns the library
+        tags:
+          type: array
+          items:
+            type: string
+          description: Tags for categorizing the library
+        molecule_count:
+          type: integer
+          description: Number of molecules in the library
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the library was created
+        updated_at:
+          type: string
+          format: date-time
+          description: Timestamp when the library was last updated
+      required:
+        - id
+        - name
+        - owner_id
+        - created_at
+    LibraryList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Library'
+        total:
+          type: integer
+          example: 100
+        page:
+          type: integer
+          example: 1
+        size:
+          type: integer
+          example: 10
+        pages:
+          type: integer
+          example: 10
+    SubmissionCreate:
+      type: object
+      properties:
+        name:
+          type: string
+          example: Binding Assay Batch 12
+          description: Name of the submission
+        cro_service_id:
+          type: string
+          format: uuid
+          description: ID of the CRO service for this submission
+        molecule_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: IDs of molecules to include in the submission
+        specifications:
+          type: object
+          description: Experimental specifications
+        timeline:
+          type: string
+          example: standard
+          description: Requested timeline for the experiment
+        notes:
+          type: string
+          description: Additional notes for the CRO
+      required:
+        - name
+        - cro_service_id
+        - molecule_ids
+    SubmissionUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Name of the submission
+        specifications:
+          type: object
+          description: Experimental specifications
+        molecule_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: IDs of molecules to include in the submission
+        timeline:
+          type: string
+          description: Requested timeline for the experiment
+        notes:
+          type: string
+          description: Additional notes for the CRO
+    Submission:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the submission
+        name:
+          type: string
+          description: Name of the submission
+        status:
+          type: string
+          description: Current status of the submission
+        cro_service_id:
+          type: string
+          format: uuid
+          description: ID of the CRO service for this submission
+        cro_service:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            provider:
+              type: string
+          description: CRO service details
+        created_by:
+          type: string
+          format: uuid
+          description: ID of the user who created the submission
+        specifications:
+          type: object
+          description: Experimental specifications
+        timeline:
+          type: string
+          description: Requested timeline for the experiment
+        notes:
+          type: string
+          description: Additional notes for the CRO
+        pricing:
+          type: object
+          properties:
+            amount:
+              type: number
+            currency:
+              type: string
+            estimated_completion_date:
+              type: string
+              format: date
+          description: Pricing information provided by the CRO
+        molecules:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              smiles:
+                type: string
+          description: Molecules included in the submission
+        documents:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              document_type:
+                type: string
+          description: Documents associated with the submission
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              status:
+                type: string
+          description: Results associated with the submission
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the submission was created
+        updated_at:
+          type: string
+          format: date-time
+          description: Timestamp when the submission was last updated
+      required:
+        - id
+        - name
+        - status
+        - cro_service_id
+        - created_by
+        - created_at
+    SubmissionList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Submission'
+        total:
+          type: integer
+          example: 100
+        page:
+          type: integer
+          example: 1
+        size:
+          type: integer
+          example: 10
+        pages:
+          type: integer
+          example: 10
+    SubmissionAction:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [SUBMIT, APPROVE, REJECT, CANCEL, PROVIDE_PRICING, REQUEST_CHANGES, COMPLETE]
+          description: Action to perform on the submission
+        notes:
+          type: string
+          description: Notes related to the action
+        pricing:
+          type: object
+          properties:
+            amount:
+              type: number
+            currency:
+              type: string
+            estimated_completion_date:
+              type: string
+              format: date
+          description: Pricing information for PROVIDE_PRICING action
+      required:
+        - action
+    Document:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the document
+        name:
+          type: string
+          description: Name of the document
+        document_type:
+          type: string
+          description: Type of document
+        submission_id:
+          type: string
+          format: uuid
+          description: ID of the submission this document belongs to
+        status:
+          type: string
+          description: Status of the document
+        url:
+          type: string
+          format: uri
+          description: URL to access the document
+        uploaded_by:
+          type: string
+          format: uuid
+          description: ID of the user who uploaded the document
+        uploaded_at:
+          type: string
+          format: date-time
+          description: Timestamp when the document was uploaded
+      required:
+        - id
+        - name
+        - document_type
+        - status
+        - url
+        - uploaded_at
+    DocumentList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Document'
+        total:
+          type: integer
+          example: 100
+        page:
+          type: integer
+          example: 1
+        size:
+          type: integer
+          example: 10
+        pages:
+          type: integer
+          example: 10
+    Result:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the result
+        submission_id:
+          type: string
+          format: uuid
+          description: ID of the submission these results belong to
+        name:
+          type: string
+          description: Name of the results
+        status:
+          type: string
+          description: Status of the results
+        notes:
+          type: string
+          description: Additional notes about the results
+        properties:
+          type: array
+          items:
+            type: object
+            properties:
+              molecule_id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              value:
+                type: number
+              units:
+                type: string
+          description: Result properties for molecules
+        uploaded_by:
+          type: string
+          format: uuid
+          description: ID of the user who uploaded the results
+        uploaded_at:
+          type: string
+          format: date-time
+          description: Timestamp when the results were uploaded
+      required:
+        - id
+        - submission_id
+        - status
+        - uploaded_at
+    ResultList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Result'
+        total:
+          type: integer
+          example: 100
+        page:
+          type: integer
+          example: 1
+        size:
+          type: integer
+          example: 10
+        pages:
+          type: integer
+          example: 10
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from the /auth/login endpoint
