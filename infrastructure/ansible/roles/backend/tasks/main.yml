@@ -1,0 +1,430 @@
+---
+# Ansible tasks for configuring and deploying the backend services
+# of the Molecular Data Management and CRO Integration Platform.
+
+- name: Include common tasks
+  include_role:
+    name: common
+  tags:
+    - common
+    - setup
+
+- name: Install backend dependencies
+  block:
+    - name: Install PostgreSQL client
+      package:
+        name: ['postgresql-client', 'python3-psycopg2']
+        state: present
+
+    - name: Install Redis client
+      package:
+        name: redis-tools
+        state: present
+
+    - name: Install additional Python packages
+      pip:
+        name: ['alembic', 'psycopg2-binary', 'redis']
+        state: present
+  tags:
+    - backend
+    - dependencies
+
+- name: Configure backend environment
+  block:
+    - name: Create backend directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: molecule-app
+        group: molecule-app
+        mode: '0755'
+      loop:
+        - "{{ app_base_dir }}/backend"
+        - "{{ app_base_dir }}/backend/config"
+        - "{{ app_base_dir }}/backend/logs"
+        - "{{ app_base_dir }}/backend/data"
+        - "{{ app_base_dir }}/backend/migrations"
+
+    - name: Generate backend environment configuration
+      template:
+        src: templates/backend.env.j2
+        dest: "{{ app_base_dir }}/backend/config/backend.env"
+        owner: molecule-app
+        group: molecule-app
+        mode: '0644'
+
+    - name: Generate application configuration
+      template:
+        src: templates/config.py.j2
+        dest: "{{ app_base_dir }}/backend/config/config.py"
+        owner: molecule-app
+        group: molecule-app
+        mode: '0644'
+
+    - name: Configure logging
+      template:
+        src: templates/logging.conf.j2
+        dest: "{{ app_base_dir }}/backend/config/logging.conf"
+        owner: molecule-app
+        group: molecule-app
+        mode: '0644'
+
+    - name: Configure Alembic
+      template:
+        src: templates/alembic.ini.j2
+        dest: "{{ app_base_dir }}/backend/config/alembic.ini"
+        owner: molecule-app
+        group: molecule-app
+        mode: '0644'
+  tags:
+    - backend
+    - config
+
+- name: Configure database
+  block:
+    - name: Check if PostgreSQL is installed locally
+      stat:
+        path: /var/lib/postgresql
+      register: postgres_installed
+
+    - name: Install PostgreSQL (if local database)
+      package:
+        name: ['postgresql', 'postgresql-contrib']
+        state: present
+      when: use_local_db | default(false)
+
+    - name: Ensure PostgreSQL service is running (if local database)
+      service:
+        name: postgresql
+        state: started
+        enabled: true
+      when: use_local_db | default(false)
+
+    - name: Create database user (if local database)
+      become: true
+      become_user: postgres
+      community.postgresql.postgresql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+        role_attr_flags: "CREATEDB,NOSUPERUSER"
+      when: use_local_db | default(false)
+
+    - name: Create application database (if local database)
+      become: true
+      become_user: postgres
+      community.postgresql.postgresql_db:
+        name: "{{ db_name }}"
+        owner: "{{ db_user }}"
+        encoding: UTF-8
+      when: use_local_db | default(false)
+
+    - name: Configure PostgreSQL for remote connections (if local database)
+      template:
+        src: templates/pg_hba.conf.j2
+        dest: /etc/postgresql/*/main/pg_hba.conf
+        owner: postgres
+        group: postgres
+        mode: '0640'
+      when: use_local_db | default(false)
+      notify: Restart PostgreSQL
+
+    - name: Configure PostgreSQL settings (if local database)
+      template:
+        src: templates/postgresql.conf.j2
+        dest: /etc/postgresql/*/main/postgresql.conf
+        owner: postgres
+        group: postgres
+        mode: '0644'
+      when: use_local_db | default(false)
+      notify: Restart PostgreSQL
+
+    - name: Set up database backup cron job (if local database)
+      cron:
+        name: "Database backup"
+        job: "pg_dump -U {{ db_user }} {{ db_name }} | gzip > {{ app_base_dir }}/backend/data/backup-$(date +\\%Y\\%m\\%d).sql.gz"
+        hour: "2"
+        minute: "0"
+      when: use_local_db | default(false)
+  tags:
+    - backend
+    - database
+
+- name: Deploy backend service
+  block:
+    - name: Determine current backend deployment color
+      shell: "docker ps --filter 'name=backend-blue' --format '{{ '{{' }}.Names{{ '}}' }}' | grep -q backend-blue && echo 'green' || echo 'blue'"
+      register: backend_color
+      changed_when: false
+      when: "deployment_type | default('blue_green') == 'blue_green'"
+
+    - name: Set backend deployment color
+      set_fact:
+        deploy_color: "{{ backend_color.stdout if backend_color is defined else 'blue' }}"
+      when: "deployment_type | default('blue_green') == 'blue_green'"
+
+    - name: Pull backend Docker image
+      community.docker.docker_image:
+        name: "{{ ecr_registry }}/{{ ecr_repository_backend }}:{{ image_tag | default('latest') }}"
+        source: pull
+        force_source: true
+
+    - name: Deploy backend service
+      community.docker.docker_container:
+        name: "backend-{{ deploy_color if deployment_type | default('blue_green') == 'blue_green' else 'main' }}"
+        image: "{{ ecr_registry }}/{{ ecr_repository_backend }}:{{ image_tag | default('latest') }}"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "{{ backend_port_map[deploy_color] if deployment_type | default('blue_green') == 'blue_green' else backend_port }}:8000"
+        env_file: "{{ app_base_dir }}/backend/config/backend.env"
+        volumes:
+          - "{{ app_base_dir }}/backend/config:/app/config:ro"
+          - "{{ app_base_dir }}/backend/logs:/app/logs"
+          - "{{ app_base_dir }}/backend/data:/app/data"
+        networks:
+          - molecule-network
+        healthcheck:
+          test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+          interval: "30s"
+          timeout: "10s"
+          retries: 3
+        cpu_shares: 2048
+        memory: "4g"
+
+    - name: Wait for backend health check
+      uri:
+        url: "http://localhost:{{ backend_port_map[deploy_color] if deployment_type | default('blue_green') == 'blue_green' else backend_port }}/api/v1/health"
+        status_code: 200
+      register: health_check
+      retries: 10
+      delay: 5
+      until: 'health_check.status == 200'
+
+    - name: Run database migrations
+      community.docker.docker_container_exec:
+        container: "backend-{{ deploy_color if deployment_type | default('blue_green') == 'blue_green' else 'main' }}"
+        command: "alembic upgrade head"
+        chdir: /app
+      when: run_migrations | default(true) and health_check.status == 200
+
+    - name: Update load balancer configuration
+      template:
+        src: templates/nginx-backend-proxy.conf.j2
+        dest: /etc/nginx/conf.d/backend-proxy.conf
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        backend_port: "{{ backend_port_map[deploy_color] if deployment_type | default('blue_green') == 'blue_green' else backend_port }}"
+      notify: Reload nginx
+      when: health_check.status == 200
+
+    - name: Stop old backend container
+      community.docker.docker_container:
+        name: "backend-{{ 'blue' if deploy_color == 'green' else 'green' }}"
+        state: stopped
+      when: "deployment_type | default('blue_green') == 'blue_green' and health_check.status == 200"
+  tags:
+    - backend
+    - deploy
+
+- name: Deploy worker services
+  block:
+    - name: Stop existing worker containers
+      community.docker.docker_container:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - "worker-csv"
+        - "worker-ai"
+        - "worker-notification"
+        - "worker-document"
+      ignore_errors: true
+
+    - name: Deploy worker containers
+      community.docker.docker_container:
+        name: "{{ item.name }}"
+        image: "{{ ecr_registry }}/{{ ecr_repository_backend }}:{{ image_tag | default('latest') }}"
+        command: "{{ item.command }}"
+        state: started
+        restart_policy: unless-stopped
+        env_file: "{{ app_base_dir }}/backend/config/backend.env"
+        volumes:
+          - "{{ app_base_dir }}/backend/config:/app/config:ro"
+          - "{{ app_base_dir }}/backend/logs:/app/logs"
+          - "{{ app_base_dir }}/backend/data:/app/data"
+        networks:
+          - molecule-network
+        cpu_shares: "{{ item.cpu }}"
+        memory: "{{ item.memory }}"
+      loop:
+        - { name: "worker-csv", command: "python -m app.tasks.worker --queue csv_processing", cpu: 2048, memory: "4g" }
+        - { name: "worker-ai", command: "python -m app.tasks.worker --queue ai_predictions", cpu: 2048, memory: "8g" }
+        - { name: "worker-notification", command: "python -m app.tasks.worker --queue notification", cpu: 1024, memory: "2g" }
+        - { name: "worker-document", command: "python -m app.tasks.worker --queue document_processing", cpu: 1024, memory: "2g" }
+
+    - name: Verify worker containers
+      community.docker.docker_container_info:
+        name: "{{ item }}"
+      register: worker_info
+      loop:
+        - "worker-csv"
+        - "worker-ai"
+        - "worker-notification"
+        - "worker-document"
+
+    - name: Display worker status
+      debug:
+        msg: "Worker {{ item.item }} is {{ 'running' if item.container.State.Running else 'not running' }}"
+      loop: "{{ worker_info.results }}"
+  tags:
+    - backend
+    - workers
+
+- name: Configure Redis (if local Redis)
+  block:
+    - name: Install Redis
+      package:
+        name: redis-server
+        state: present
+      when: use_local_redis | default(false)
+
+    - name: Configure Redis
+      template:
+        src: templates/redis.conf.j2
+        dest: /etc/redis/redis.conf
+        owner: redis
+        group: redis
+        mode: '0640'
+      when: use_local_redis | default(false)
+      notify: Restart Redis
+
+    - name: Ensure Redis service is running
+      service:
+        name: redis-server
+        state: started
+        enabled: true
+      when: use_local_redis | default(false)
+
+    - name: Deploy Redis container (if not using local Redis)
+      community.docker.docker_container:
+        name: redis
+        image: redis:7.0-alpine
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "6379:6379"
+        volumes:
+          - "{{ app_base_dir }}/redis/data:/data"
+        networks:
+          - molecule-network
+        command: "redis-server --appendonly yes"
+      when: not use_local_redis | default(false)
+  tags:
+    - backend
+    - redis
+
+- name: Configure backend security
+  block:
+    - name: Generate API security configuration
+      template:
+        src: templates/api-security.conf.j2
+        dest: "{{ app_base_dir }}/backend/config/security.conf"
+        owner: molecule-app
+        group: molecule-app
+        mode: '0644'
+
+    - name: Configure CORS settings
+      template:
+        src: templates/cors-settings.json.j2
+        dest: "{{ app_base_dir }}/backend/config/cors.json"
+        owner: molecule-app
+        group: molecule-app
+        mode: '0644'
+
+    - name: Configure rate limiting
+      template:
+        src: templates/rate-limits.json.j2
+        dest: "{{ app_base_dir }}/backend/config/rate-limits.json"
+        owner: molecule-app
+        group: molecule-app
+        mode: '0644'
+
+    - name: Configure JWT settings
+      template:
+        src: templates/jwt-config.json.j2
+        dest: "{{ app_base_dir }}/backend/config/jwt.json"
+        owner: molecule-app
+        group: molecule-app
+        mode: '0600'
+  tags:
+    - backend
+    - security
+
+- name: Configure monitoring for backend
+  block:
+    - name: Generate Prometheus backend targets
+      template:
+        src: templates/prometheus-backend-targets.yml.j2
+        dest: /etc/prometheus/targets/backend.yml
+        owner: prometheus
+        group: prometheus
+        mode: '0644'
+      notify: Reload Prometheus
+      when: install_prometheus | default(false)
+
+    - name: Configure backend logging for CloudWatch
+      template:
+        src: templates/cloudwatch-backend-config.json.j2
+        dest: /opt/aws/amazon-cloudwatch-agent/etc/backend-logs.json
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart CloudWatch agent
+      when: install_cloudwatch_agent | default(true)
+
+    - name: Set up health check script
+      template:
+        src: templates/health-check.sh.j2
+        dest: "{{ app_base_dir }}/backend/scripts/health-check.sh"
+        owner: molecule-app
+        group: molecule-app
+        mode: '0755'
+
+    - name: Set up health check cron job
+      cron:
+        name: "Backend health check"
+        job: "{{ app_base_dir }}/backend/scripts/health-check.sh >> {{ app_base_dir }}/backend/logs/health-check.log 2>&1"
+        minute: "*/5"
+  tags:
+    - backend
+    - monitoring
+
+# Handlers for service restarts
+handlers:
+  - name: Restart PostgreSQL
+    service:
+      name: postgresql
+      state: restarted
+
+  - name: Restart Redis
+    service:
+      name: redis-server
+      state: restarted
+
+  - name: Reload nginx
+    service:
+      name: nginx
+      state: reloaded
+
+  - name: Reload Prometheus
+    service:
+      name: prometheus
+      state: reloaded
+    when: install_prometheus | default(false)
+
+  - name: Restart CloudWatch agent
+    service:
+      name: amazon-cloudwatch-agent
+      state: restarted
+    when: install_cloudwatch_agent | default(true)
