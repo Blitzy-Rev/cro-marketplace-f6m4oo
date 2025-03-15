@@ -1,0 +1,184 @@
+{
+  "loadTestConfig": {
+    "stages": [
+      { "duration": "1m", "target": 10, "description": "Ramp up to 10 concurrent users" },
+      { "duration": "5m", "target": 50, "description": "Ramp up to 50 concurrent users" },
+      { "duration": "10m", "target": 50, "description": "Stay at 50 concurrent users" },
+      { "duration": "1m", "target": 0, "description": "Ramp down to 0 users" }
+    ],
+    "scenarioWeights": {
+      "csvUpload": 0.2,
+      "moleculeQuery": 0.4,
+      "libraryManagement": 0.2,
+      "submission": 0.2
+    },
+    "thinkTimeBounds": {
+      "min": 3,
+      "max": 10
+    }
+  },
+  
+  "stressTestConfig": {
+    "stages": [
+      { "duration": "2m", "target": 50, "description": "Ramp up to normal load" },
+      { "duration": "5m", "target": 100, "description": "Ramp up to 200% of normal load" },
+      { "duration": "5m", "target": 200, "description": "Ramp up to 400% of normal load" },
+      { "duration": "3m", "target": 0, "description": "Ramp down to 0 users" }
+    ],
+    "scenarioWeights": {
+      "concurrentAuth": 0.1,
+      "largeCSVUpload": 0.3,
+      "complexQuery": 0.4,
+      "concurrentSubmissions": 0.2
+    },
+    "thinkTimeBounds": {
+      "min": 1,
+      "max": 3
+    },
+    "maxVirtualUsers": 200
+  },
+  
+  "enduranceTestConfig": {
+    "stages": [
+      { "duration": "10m", "target": 30, "description": "Ramp up to moderate load" },
+      { "duration": "23h", "target": 30, "description": "Maintain moderate load for 23 hours" },
+      { "duration": "30m", "target": 0, "description": "Ramp down to 0 users" }
+    ],
+    "scenarioWeights": {
+      "authentication": 0.1,
+      "periodicCSVUpload": 0.2,
+      "consistentQueries": 0.5,
+      "periodicSubmissions": 0.2
+    },
+    "thinkTimeBounds": {
+      "min": 5,
+      "max": 15
+    },
+    "duration": "24h",
+    "degradationThresholds": {
+      "responseTime": 0.2,
+      "errorRate": 0.01,
+      "memoryUsage": 0.15
+    }
+  },
+  
+  "thresholds": {
+    "http_req_duration": ["p95<500"],
+    "http_req_failed": ["rate<0.01"],
+    "checks": ["rate>0.99"],
+    "csv_processing_time": ["p95<30000"],
+    "molecule_query_time": ["p95<1000"],
+    "submission_creation_time": ["p95<1000"]
+  },
+  
+  "endpoints": {
+    "auth": {
+      "login": "/auth/login",
+      "refresh": "/auth/refresh",
+      "logout": "/auth/logout"
+    },
+    "molecules": {
+      "upload": "/molecules/upload/csv",
+      "status": "/molecules/csv/{id}/status",
+      "filter": "/molecules/filter",
+      "search": "/molecules/search/similarity",
+      "detail": "/molecules/{id}"
+    },
+    "libraries": {
+      "list": "/libraries",
+      "create": "/libraries",
+      "detail": "/libraries/{id}",
+      "molecules": "/libraries/{id}/molecules"
+    },
+    "submissions": {
+      "list": "/submissions",
+      "create": "/submissions",
+      "detail": "/submissions/{id}",
+      "status": "/submissions/{id}/status",
+      "approve": "/submissions/{id}/approve"
+    },
+    "documents": {
+      "upload": "/documents/upload",
+      "signature": "/documents/signature",
+      "download": "/documents/{id}/download"
+    },
+    "results": {
+      "upload": "/results/upload",
+      "list": "/results",
+      "detail": "/results/{id}"
+    }
+  },
+  
+  "testData": {
+    "users": {
+      "pharma": {
+        "username": "pharma_test_user",
+        "password": "TestPassword123!",
+        "role": "pharma_scientist"
+      },
+      "cro": {
+        "username": "cro_test_user",
+        "password": "TestPassword123!",
+        "role": "cro_technician"
+      },
+      "admin": {
+        "username": "admin_test_user",
+        "password": "TestPassword123!",
+        "role": "system_administrator"
+      }
+    },
+    "csvFiles": {
+      "small": {
+        "moleculeCount": 100,
+        "properties": ["MW", "LogP", "TPSA", "HBD", "HBA"]
+      },
+      "medium": {
+        "moleculeCount": 10000,
+        "properties": ["MW", "LogP", "TPSA", "HBD", "HBA", "RotBonds", "AromaticRings"]
+      },
+      "large": {
+        "moleculeCount": 100000,
+        "properties": ["MW", "LogP", "TPSA", "HBD", "HBA", "RotBonds", "AromaticRings", "PAINS", "Lipinski"]
+      },
+      "extraLarge": {
+        "moleculeCount": 500000,
+        "properties": ["MW", "LogP", "TPSA", "HBD", "HBA", "RotBonds", "AromaticRings", "PAINS", "Lipinski", "QED", "SyntheticAccessibility"]
+      }
+    },
+    "molecules": {
+      "sampleSmiles": [
+        "CC(C)CCO",
+        "c1ccccc1",
+        "CCN(CC)CC",
+        "CC(=O)OC1=CC=CC=C1C(=O)O",
+        "CN1C=NC2=C1C(=O)N(C(=O)N2C)C"
+      ],
+      "propertyRanges": {
+        "MW": { "min": 50, "max": 500 },
+        "LogP": { "min": -2, "max": 5 },
+        "TPSA": { "min": 0, "max": 140 },
+        "HBD": { "min": 0, "max": 5 },
+        "HBA": { "min": 0, "max": 10 }
+      }
+    },
+    "libraries": {
+      "testLibraries": [
+        { "name": "Test Library 1", "description": "Library for performance testing" },
+        { "name": "Test Library 2", "description": "Another library for performance testing" },
+        { "name": "Large Test Library", "description": "Large library for stress testing" }
+      ]
+    },
+    "submissions": {
+      "testSubmissions": [
+        { "name": "Test Submission 1", "cro_service": "Binding Assay", "molecule_count": 5 },
+        { "name": "Test Submission 2", "cro_service": "ADME Panel", "molecule_count": 10 },
+        { "name": "Large Test Submission", "cro_service": "Full Screening Panel", "molecule_count": 50 }
+      ]
+    },
+    "queryPatterns": {
+      "simple": { "properties": ["MW", "LogP"], "limit": 100 },
+      "moderate": { "properties": ["MW", "LogP", "TPSA", "HBD", "HBA"], "limit": 500 },
+      "complex": { "properties": ["MW", "LogP", "TPSA", "HBD", "HBA", "RotBonds", "AromaticRings"], "substructure": true, "limit": 1000 }
+    }
+  }
+}
