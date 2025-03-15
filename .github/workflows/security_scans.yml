@@ -1,0 +1,217 @@
+name: Security Scans
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - 'infrastructure/**'
+      - 'deployment/**'
+      - 'Dockerfile'
+      - 'docker-compose*.yml'
+      - 'requirements.txt'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'pyproject.toml'
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: '0 0 * * 0'  # Run every Sunday at midnight
+  workflow_dispatch:  # Allow manual triggers
+
+jobs:
+  dependency_scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: pip install safety
+
+      - name: Run safety check
+        run: safety check -r src/backend/requirements.txt --json > python-vulnerabilities.json || true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Node.js dependencies
+        working-directory: src/web
+        run: npm ci
+
+      - name: Run npm audit
+        working-directory: src/web
+        run: npm audit --json > ../../js-vulnerabilities.json || true
+
+      - name: Upload vulnerability reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: dependency-vulnerabilities
+          path: '*-vulnerabilities.json'
+
+  container_scan:
+    name: Container Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Build backend image
+        run: docker build -t moleculeflow-backend:${{ github.sha }} src/backend
+
+      - name: Build frontend image
+        run: docker build -t moleculeflow-frontend:${{ github.sha }} src/web
+
+      - name: Scan backend image with Trivy
+        uses: aquasecurity/trivy-action@0.10.0
+        with:
+          image-ref: 'moleculeflow-backend:${{ github.sha }}'
+          format: 'json'
+          output: 'backend-vulnerabilities.json'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Scan frontend image with Trivy
+        uses: aquasecurity/trivy-action@0.10.0
+        with:
+          image-ref: 'moleculeflow-frontend:${{ github.sha }}'
+          format: 'json'
+          output: 'frontend-vulnerabilities.json'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload vulnerability reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: container-vulnerabilities
+          path: '*-vulnerabilities.json'
+
+  code_scan:
+    name: Static Code Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: python,javascript
+          queries: security-extended
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Bandit
+        run: pip install bandit
+
+      - name: Run Bandit
+        run: bandit -r src/backend -f json -o python-code-vulnerabilities.json || true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install ESLint
+        working-directory: src/web
+        run: npm install eslint @typescript-eslint/parser @typescript-eslint/eslint-plugin eslint-plugin-security
+
+      - name: Run ESLint security scan
+        working-directory: src/web
+        run: npx eslint --config .eslintrc.js --plugin security --format json src > ../js-code-vulnerabilities.json || true
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+
+      - name: Upload vulnerability reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: code-vulnerabilities
+          path: '*-code-vulnerabilities.json'
+
+  secret_scan:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: '0'
+
+      - name: Detect Secrets with Gitleaks
+        uses: zricethezav/gitleaks-action@v2
+        with:
+          config-path: '.github/gitleaks.toml'
+          format: 'json'
+          report-path: 'gitleaks-report.json'
+
+      - name: Upload secret detection report
+        uses: actions/upload-artifact@v3
+        with:
+          name: secret-detection
+          path: 'gitleaks-report.json'
+
+  infrastructure_scan:
+    name: Infrastructure Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Install tfsec
+        run: curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+
+      - name: Run tfsec
+        run: tfsec infrastructure/terraform --format json > terraform-vulnerabilities.json || true
+
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+
+      - name: Run cfn-lint
+        run: cfn-lint -f json infrastructure/cloudformation/*.yml > cloudformation-vulnerabilities.json || true
+
+      - name: Upload vulnerability reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: infrastructure-vulnerabilities
+          path: '*-vulnerabilities.json'
+
+  security_report:
+    name: Security Report Generation
+    needs: [dependency_scan, container_scan, code_scan, secret_scan, infrastructure_scan]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Download all reports
+        uses: actions/download-artifact@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install report generation dependencies
+        run: pip install pandas matplotlib jinja2
+
+      - name: Generate comprehensive security report
+        run: python .github/scripts/generate_security_report.py
+
+      - name: Upload comprehensive report
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-report
+          path: 'security-report.html'
+
+      - name: Post summary to GitHub Security tab
+        run: python .github/scripts/post_security_summary.py
