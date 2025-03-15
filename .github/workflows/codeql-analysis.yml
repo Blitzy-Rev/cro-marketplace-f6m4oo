@@ -1,0 +1,49 @@
+# CodeQL analysis workflow for the Molecular Data Management and CRO Integration Platform
+name: CodeQL Analysis
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - '!**.md'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - '!**.md'
+  schedule:
+    - cron: '0 0 * * 0'  # Run weekly at midnight on Sunday
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  analyze:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write  # Required to upload security results
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'python', 'javascript' ]  # Analyzing both backend and frontend code
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3  # actions/checkout version v3
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2  # github/codeql-action version v2
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended  # Using extended security query suite for comprehensive analysis
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v2  # github/codeql-action version v2
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2  # github/codeql-action version v2
+        with:
+          category: ${{ matrix.language }}
