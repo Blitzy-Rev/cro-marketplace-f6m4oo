@@ -1,0 +1,189 @@
+name: Performance Tests
+
+on:
+  schedule:
+    # Run weekly on Sunday at midnight
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+    inputs:
+      test_type:
+        description: 'Type of performance test to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - load
+          - stress
+          - endurance
+      environment:
+        description: 'Target environment for testing'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+  push:
+    branches:
+      - main
+    paths:
+      - src/backend/**
+      - tests/performance/**
+      - .github/workflows/performance_tests.yml
+
+env:
+  TEST_ENVIRONMENT: ${{ github.event.inputs.environment || 'staging' }}
+  API_BASE_URL: ${{ secrets.API_BASE_URL }}
+  TEST_USERNAME: ${{ secrets.TEST_USERNAME }}
+  TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
+  K6_OUT: 'json=results.json,html=results.html'
+
+jobs:
+  setup_test_environment:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Start test environment
+        uses: docker/compose-action@v2
+        with:
+          compose-file: deployment/docker-compose/docker-compose.test.yml
+          up-flags: '--build --detach'
+      
+      - name: Wait for services to be healthy
+        run: sleep 30
+      
+      - name: Verify API endpoints
+        run: curl -f ${{ env.API_BASE_URL }}/health || exit 1
+
+  run_load_test:
+    needs: [setup_test_environment]
+    if: github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'load' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Run k6 load test
+        uses: grafana/k6-action@v0.3.0
+        with:
+          filename: tests/performance/k6/load_test.js
+          flags: '--out ${{ env.K6_OUT }}'
+        env:
+          API_BASE_URL: ${{ env.API_BASE_URL }}
+          K6_USERNAME: ${{ env.TEST_USERNAME }}
+          K6_PASSWORD: ${{ env.TEST_PASSWORD }}
+      
+      - name: Check performance thresholds
+        run: grep -q '"failures":0' results.json || exit 1
+      
+      - name: Upload load test results
+        uses: actions/upload-artifact@v3
+        with:
+          name: load-test-results
+          path: results.*
+
+  run_stress_test:
+    needs: [setup_test_environment]
+    if: github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'stress' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Run k6 stress test
+        uses: grafana/k6-action@v0.3.0
+        with:
+          filename: tests/performance/k6/stress_test.js
+          flags: '--out ${{ env.K6_OUT }}'
+        env:
+          API_BASE_URL: ${{ env.API_BASE_URL }}
+          K6_USERNAME: ${{ env.TEST_USERNAME }}
+          K6_PASSWORD: ${{ env.TEST_PASSWORD }}
+      
+      - name: Check performance thresholds
+        run: grep -q '"failures":0' results.json || exit 1
+      
+      - name: Upload stress test results
+        uses: actions/upload-artifact@v3
+        with:
+          name: stress-test-results
+          path: results.*
+
+  run_endurance_test:
+    needs: [setup_test_environment]
+    if: github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'endurance' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Modify endurance test for CI
+        run: sed -i 's/"duration": "23h"/"duration": "30m"/g' tests/performance/k6/config.json
+      
+      - name: Run k6 endurance test
+        uses: grafana/k6-action@v0.3.0
+        with:
+          filename: tests/performance/k6/endurance_test.js
+          flags: '--out ${{ env.K6_OUT }}'
+        env:
+          API_BASE_URL: ${{ env.API_BASE_URL }}
+          K6_USERNAME: ${{ env.TEST_USERNAME }}
+          K6_PASSWORD: ${{ env.TEST_PASSWORD }}
+      
+      - name: Check performance thresholds
+        run: grep -q '"failures":0' results.json || exit 1
+      
+      - name: Upload endurance test results
+        uses: actions/upload-artifact@v3
+        with:
+          name: endurance-test-results
+          path: results.*
+
+  generate_report:
+    needs: [run_load_test, run_stress_test, run_endurance_test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Download load test results
+        uses: actions/download-artifact@v3
+        with:
+          name: load-test-results
+          path: reports/load
+        if: needs.run_load_test.result == 'success'
+      
+      - name: Download stress test results
+        uses: actions/download-artifact@v3
+        with:
+          name: stress-test-results
+          path: reports/stress
+        if: needs.run_stress_test.result == 'success'
+      
+      - name: Download endurance test results
+        uses: actions/download-artifact@v3
+        with:
+          name: endurance-test-results
+          path: reports/endurance
+        if: needs.run_endurance_test.result == 'success'
+      
+      - name: Generate consolidated report
+        run: python tests/performance/scripts/generate_report.py --output consolidated-report.html
+      
+      - name: Upload consolidated report
+        uses: actions/upload-artifact@v3
+        with:
+          name: consolidated-performance-report
+          path: consolidated-report.html
+      
+      - name: Post summary to workflow
+        run: echo "### Performance Test Results 📊\n\nSee the [consolidated report](../artifacts/consolidated-performance-report) for detailed results." >> $GITHUB_STEP_SUMMARY
