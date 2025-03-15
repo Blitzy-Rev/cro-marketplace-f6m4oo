@@ -1,0 +1,222 @@
+# Production Inventory for Molecular Data Management and CRO Integration Platform
+# This inventory defines all production hosts and variables for Ansible automation
+
+all:
+  children:
+    prod:
+      children:
+        web_servers:
+          hosts:
+            prod-web-1:
+              ansible_host: 10.0.1.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-web-2:
+              ansible_host: 10.0.2.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-web-3:
+              ansible_host: 10.0.3.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-web-dr-1:
+              ansible_host: 10.1.1.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-web-dr-2:
+              ansible_host: 10.1.2.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+          vars:
+            service_name: frontend
+            container_count: 5
+            cpu: 2.0
+            memory: 4096
+            
+        api_servers:
+          hosts:
+            prod-api-1:
+              ansible_host: 10.0.4.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-api-2:
+              ansible_host: 10.0.5.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-api-3:
+              ansible_host: 10.0.6.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-api-dr-1:
+              ansible_host: 10.1.4.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-api-dr-2:
+              ansible_host: 10.1.5.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+          vars:
+            service_name: backend
+            container_count: 5
+            cpu: 4.0
+            memory: 8192
+            
+        worker_servers:
+          hosts:
+            prod-worker-1:
+              ansible_host: 10.0.7.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-worker-2:
+              ansible_host: 10.0.8.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-worker-3:
+              ansible_host: 10.0.9.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-worker-dr-1:
+              ansible_host: 10.1.7.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-worker-dr-2:
+              ansible_host: 10.1.8.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+          vars:
+            service_name: worker
+            container_count: 5
+            cpu: 4.0
+            memory: 16384
+            
+        database_servers:
+          hosts:
+            prod-db-primary:
+              ansible_host: 10.0.10.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-db-replica-1:
+              ansible_host: 10.0.11.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-db-replica-2:
+              ansible_host: 10.0.12.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-db-dr-primary:
+              ansible_host: 10.1.10.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-db-dr-replica:
+              ansible_host: 10.1.11.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+          vars:
+            db_instance_class: db.r5.2xlarge
+            db_allocated_storage: 200
+            db_max_allocated_storage: 1000
+            db_backup_retention_period: 35
+            multi_az: true
+            
+        cache_servers:
+          hosts:
+            prod-cache-1:
+              ansible_host: 10.0.13.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-cache-2:
+              ansible_host: 10.0.14.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-cache-3:
+              ansible_host: 10.0.15.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-cache-dr-1:
+              ansible_host: 10.1.13.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-cache-dr-2:
+              ansible_host: 10.1.14.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+          vars:
+            cache_node_type: cache.r5.large
+            cache_engine_version: "7.0"
+            cache_parameter_group: default.redis7.cluster.on
+            cache_nodes: 5
+            
+        monitoring_servers:
+          hosts:
+            prod-monitor-1:
+              ansible_host: 10.0.16.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-monitor-2:
+              ansible_host: 10.0.17.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+            prod-monitor-dr:
+              ansible_host: 10.1.16.100
+              ansible_user: ec2-user
+              ansible_ssh_private_key_file: ~/.ssh/prod-key.pem
+          vars:
+            prometheus_retention_time: "90d"
+            grafana_admin_password: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') | default('admin', true) }}"
+            alertmanager_resolve_timeout: "5m"
+            
+      vars:
+        environment: prod
+        aws_region: us-east-1
+        dr_region: us-west-2
+        vpc_id: "{{ lookup('env', 'PROD_VPC_ID') }}"
+        dr_vpc_id: "{{ lookup('env', 'PROD_DR_VPC_ID') }}"
+        deployment_type: canary
+        domain_name: moleculeflow.example.com
+        log_level: INFO
+        backup_enabled: true
+        monitoring_enabled: true
+        alert_email: ops-team@example.com
+        alert_phone: "{{ lookup('env', 'OPS_PHONE_NUMBER') }}"
+        s3_document_bucket: molecule-platform-prod-documents
+        s3_csv_bucket: molecule-platform-prod-csv
+        s3_results_bucket: molecule-platform-prod-results
+        cloudwatch_log_retention: 90
+        app_version: "{{ lookup('env', 'APP_VERSION') | default('latest', true) }}"
+        backend_port_map:
+          blue: 8001
+          green: 8002
+        deployment_color: blue
+        app_base_dir: /opt/moleculeflow
+        ecr_registry: "{{ aws_account_id }}.dkr.ecr.{{ aws_region }}.amazonaws.com"
+        ecr_repository_backend: moleculeflow/backend
+        ecr_repository_frontend: moleculeflow/frontend
+        image_tag: "{{ app_version }}"
+        database_url: "postgresql://molecule_app:{{ lookup('env', 'DB_PASSWORD') }}@{{ groups['database_servers'][0] }}:5432/molecule_db"
+        redis_url: "redis://{{ groups['cache_servers'][0] }}:6379/0"
+        ai_engine_url: https://ai-engine.moleculeflow.example.com/api/v1
+        ai_engine_api_key: "{{ lookup('env', 'AI_ENGINE_API_KEY') }}"
+        api_url: "https://api.{{ domain_name }}"
+        frontend_url: "https://{{ domain_name }}"
+        auth_domain: "auth.{{ domain_name }}"
+        waf_enabled: true
+        ddos_protection: true
+        ssl_policy: ELBSecurityPolicy-TLS-1-2-2017-01
+        backup_frequency: hourly
+        backup_retention:
+          hourly: "24"
+          daily: "30"
+          weekly: "52"
+          monthly: "36"
+        disaster_recovery:
+          rto: "1h"
+          rpo: "15m"
+          testing_frequency: quarterly
+          
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_common_args: -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+    ansible_become: true
+    project_name: moleculeflow
+    docker_registry: "{{ lookup('env', 'DOCKER_REGISTRY') }}"
+    aws_account_id: "{{ lookup('env', 'AWS_ACCOUNT_ID') }}"
