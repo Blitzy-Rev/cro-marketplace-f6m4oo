@@ -1,0 +1,194 @@
+{
+  "family": "moleculeflow-backend",
+  "executionRoleArn": "${aws_iam_role.ecs_execution_role.arn}",
+  "taskRoleArn": "${aws_iam_role.ecs_task_role.arn}",
+  "networkMode": "awsvpc",
+  "containerDefinitions": [
+    {
+      "name": "backend-api",
+      "image": "${aws_ecr_repository.backend_repo.repository_url}:latest",
+      "essential": true,
+      "cpu": 1024,
+      "memory": 2048,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "hostPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "ENV",
+          "value": "${var.environment}"
+        },
+        {
+          "name": "DEBUG",
+          "value": "0"
+        },
+        {
+          "name": "PROJECT_NAME",
+          "value": "Molecular Data Management and CRO Integration Platform"
+        },
+        {
+          "name": "API_V1_STR",
+          "value": "/api/v1"
+        },
+        {
+          "name": "REDIS_URL",
+          "value": "${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379/0"
+        },
+        {
+          "name": "S3_BUCKET_NAME",
+          "value": "${aws_s3_bucket.molecule_data.bucket}"
+        },
+        {
+          "name": "AWS_REGION",
+          "value": "${var.aws_region}"
+        },
+        {
+          "name": "DATABASE_MAX_CONNECTIONS",
+          "value": "20"
+        },
+        {
+          "name": "DATABASE_POOL_SIZE",
+          "value": "10"
+        },
+        {
+          "name": "DATABASE_POOL_OVERFLOW",
+          "value": "10"
+        },
+        {
+          "name": "ACCESS_TOKEN_EXPIRE_MINUTES",
+          "value": "15"
+        },
+        {
+          "name": "REFRESH_TOKEN_EXPIRE_DAYS",
+          "value": "7"
+        },
+        {
+          "name": "PAGINATION_DEFAULT_PAGE",
+          "value": "1"
+        },
+        {
+          "name": "PAGINATION_DEFAULT_PAGE_SIZE",
+          "value": "50"
+        },
+        {
+          "name": "PAGINATION_MAX_PAGE_SIZE",
+          "value": "100"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "value": "INFO"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "SECRET_KEY",
+          "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:SECRET_KEY::"
+        },
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:DATABASE_URL::"
+        },
+        {
+          "name": "AWS_ACCESS_KEY_ID",
+          "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:AWS_ACCESS_KEY_ID::"
+        },
+        {
+          "name": "AWS_SECRET_ACCESS_KEY",
+          "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:AWS_SECRET_ACCESS_KEY::"
+        },
+        {
+          "name": "AI_ENGINE_API_URL",
+          "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:AI_ENGINE_API_URL::"
+        },
+        {
+          "name": "AI_ENGINE_API_KEY",
+          "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:AI_ENGINE_API_KEY::"
+        },
+        {
+          "name": "DOCUSIGN_INTEGRATION_KEY",
+          "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:DOCUSIGN_INTEGRATION_KEY::"
+        },
+        {
+          "name": "DOCUSIGN_USER_ID",
+          "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:DOCUSIGN_USER_ID::"
+        },
+        {
+          "name": "DOCUSIGN_BASE_URL",
+          "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:DOCUSIGN_BASE_URL::"
+        },
+        {
+          "name": "SMTP_USER",
+          "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:SMTP_USER::"
+        },
+        {
+          "name": "SMTP_PASSWORD",
+          "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:SMTP_PASSWORD::"
+        },
+        {
+          "name": "SENTRY_DSN",
+          "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:SENTRY_DSN::"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/moleculeflow-backend",
+          "awslogs-region": "${var.aws_region}",
+          "awslogs-stream-prefix": "backend",
+          "awslogs-create-group": "true"
+        }
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "curl -f http://localhost:8000/api/v1/health || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      },
+      "ulimits": [
+        {
+          "name": "nofile",
+          "softLimit": 65536,
+          "hardLimit": 65536
+        }
+      ]
+    }
+  ],
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "1024",
+  "memory": "2048",
+  "tags": [
+    {
+      "key": "Name",
+      "value": "moleculeflow-backend"
+    },
+    {
+      "key": "Environment",
+      "value": "${var.environment}"
+    },
+    {
+      "key": "Project",
+      "value": "MoleculeFlow"
+    },
+    {
+      "key": "Service",
+      "value": "backend-api"
+    }
+  ],
+  "ephemeralStorage": {
+    "sizeInGiB": 20
+  },
+  "runtimePlatform": {
+    "operatingSystemFamily": "LINUX",
+    "cpuArchitecture": "X86_64"
+  }
+}
