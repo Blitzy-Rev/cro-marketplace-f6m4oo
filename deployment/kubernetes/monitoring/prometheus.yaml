@@ -1,0 +1,542 @@
+---
+# ServiceAccount for Prometheus
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: molecule-platform
+  labels:
+    app: prometheus
+    component: monitoring
+    part-of: molecule-platform
+---
+# ClusterRole for Prometheus
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+  labels:
+    app: prometheus
+    component: monitoring
+    part-of: molecule-platform
+rules:
+- apiGroups: [""]
+  resources:
+  - nodes
+  - nodes/proxy
+  - services
+  - endpoints
+  - pods
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - extensions
+  resources:
+  - ingresses
+  verbs: ["get", "list", "watch"]
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+---
+# ClusterRoleBinding for Prometheus
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+  labels:
+    app: prometheus
+    component: monitoring
+    part-of: molecule-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: molecule-platform
+---
+# ConfigMap for Prometheus configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: molecule-platform
+  labels:
+    app: prometheus
+    component: monitoring
+    part-of: molecule-platform
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      scrape_timeout: 10s
+      external_labels:
+        environment: production
+        monitor: 'molecule-platform-monitor'
+
+    # Alertmanager configuration
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets:
+              - alertmanager.molecule-platform.svc.cluster.local:9093
+
+    # Rule files
+    rule_files:
+      - "/etc/prometheus/rules/system-health-rules.yml"
+      - "/etc/prometheus/rules/api-performance-rules.yml"
+      - "/etc/prometheus/rules/database-rules.yml"
+      - "/etc/prometheus/rules/business-metrics-rules.yml"
+
+    # Scrape configurations
+    scrape_configs:
+      # Kubernetes API server
+      - job_name: 'kubernetes-apiservers'
+        kubernetes_sd_configs:
+          - role: endpoints
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: default;kubernetes;https
+
+      # Kubernetes nodes
+      - job_name: 'kubernetes-nodes'
+        kubernetes_sd_configs:
+          - role: node
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/${1}/proxy/metrics
+
+      # Kubernetes pods
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: kubernetes_pod_name
+
+      # Kubernetes services
+      - job_name: 'kubernetes-services'
+        kubernetes_sd_configs:
+          - role: service
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: kubernetes_service_name
+
+      # API Performance metrics
+      - job_name: 'api-performance'
+        kubernetes_sd_configs:
+          - role: service
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_component]
+            action: keep
+            regex: api
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: kubernetes_service_name
+        metrics_path: /metrics
+        scrape_interval: 10s
+
+      # Molecule Service metrics
+      - job_name: 'molecule-service'
+        kubernetes_sd_configs:
+          - role: service
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_component]
+            action: keep
+            regex: molecule-service
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: kubernetes_service_name
+        metrics_path: /metrics
+        scrape_interval: 15s
+
+      # AI Integration Service metrics
+      - job_name: 'ai-integration-service'
+        kubernetes_sd_configs:
+          - role: service
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_component]
+            action: keep
+            regex: ai-integration-service
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: kubernetes_service_name
+        metrics_path: /metrics
+        scrape_interval: 15s
+
+      # Database metrics
+      - job_name: 'database-metrics'
+        kubernetes_sd_configs:
+          - role: service
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_component]
+            action: keep
+            regex: database
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: kubernetes_service_name
+        metrics_path: /metrics
+        scrape_interval: 30s
+
+      # Redis Cache metrics
+      - job_name: 'redis-metrics'
+        kubernetes_sd_configs:
+          - role: service
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_component]
+            action: keep
+            regex: redis
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: kubernetes_service_name
+        metrics_path: /metrics
+        scrape_interval: 30s
+---
+# ConfigMap for Prometheus rules
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  namespace: molecule-platform
+  labels:
+    app: prometheus
+    component: monitoring
+    part-of: molecule-platform
+data:
+  system-health-rules.yml: |
+    groups:
+    - name: system-health
+      rules:
+      - alert: HighCPUUsage
+        expr: avg(node_cpu_seconds_total{mode!="idle"}) by (instance) > 0.80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is above 80% for 5 minutes"
+          
+      - alert: HighMemoryUsage
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is above 85% for 5 minutes"
+          
+      - alert: HighDiskUsage
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High disk usage on {{ $labels.instance }}"
+          description: "Disk usage is above 85% for 5 minutes"
+          
+      - alert: PodCrashLooping
+        expr: kube_pod_container_status_restarts_total{namespace="molecule-platform"} > 5
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pod is crash looping"
+          description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is crash looping"
+
+  api-performance-rules.yml: |
+    groups:
+    - name: api-performance
+      rules:
+      - alert: HighAPILatency
+        expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job="api-performance"}[5m])) by (le, handler)) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API latency"
+          description: "95th percentile of API response time is above 500ms for 5 minutes"
+          
+      - alert: HighAPIErrorRate
+        expr: sum(rate(http_requests_total{job="api-performance", status=~"5.."}[5m])) / sum(rate(http_requests_total{job="api-performance"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High API error rate"
+          description: "Error rate is above 5% for 5 minutes"
+          
+      - alert: APIHighTraffic
+        expr: sum(rate(http_requests_total{job="api-performance"}[5m])) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API traffic"
+          description: "API is receiving more than 1000 requests per second"
+
+  database-rules.yml: |
+    groups:
+    - name: database-performance
+      rules:
+      - alert: SlowDatabaseQueries
+        expr: histogram_quantile(0.95, sum(rate(pg_query_duration_seconds_bucket{job="database-metrics"}[5m])) by (le, query)) > 0.25
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow database queries"
+          description: "95th percentile of database query time is above 250ms for 5 minutes"
+          
+      - alert: HighDatabaseConnections
+        expr: pg_stat_activity_count{job="database-metrics"} > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High database connections"
+          description: "More than 80 active database connections"
+          
+      - alert: LowCacheHitRatio
+        expr: pg_stat_database_blks_hit / (pg_stat_database_blks_hit + pg_stat_database_blks_read) < 0.9
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low cache hit ratio"
+          description: "Database cache hit ratio is below 90% for 15 minutes"
+
+  business-metrics-rules.yml: |
+    groups:
+    - name: business-metrics
+      rules:
+      - alert: LowMoleculeUploadSuccess
+        expr: molecule_upload_success_rate < 0.95
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low molecule upload success rate"
+          description: "Molecule upload success rate is below 95% for 30 minutes"
+          
+      - alert: SlowCSVProcessing
+        expr: molecule_csv_processing_seconds > 60
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow CSV processing"
+          description: "CSV processing is taking more than 60 seconds per 10K molecules for 15 minutes"
+          
+      - alert: HighAIPredictionFailure
+        expr: ai_prediction_failure_rate > 0.05
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High AI prediction failure rate"
+          description: "AI prediction failure rate is above 5% for 15 minutes"
+          
+      - alert: SlowCROSubmissionProcessing
+        expr: cro_submission_processing_seconds > 10
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow CRO submission processing"
+          description: "CRO submission processing is taking more than 10 seconds for 15 minutes"
+---
+# PersistentVolumeClaim for Prometheus data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data
+  namespace: molecule-platform
+  labels:
+    app: prometheus
+    component: monitoring
+    part-of: molecule-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: standard
+---
+# Deployment for Prometheus
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: molecule-platform
+  labels:
+    app: prometheus
+    component: monitoring
+    part-of: molecule-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+      component: monitoring
+  template:
+    metadata:
+      labels:
+        app: prometheus
+        component: monitoring
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.45.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time=15d"
+            - "--web.console.libraries=/etc/prometheus/console_libraries"
+            - "--web.console.templates=/etc/prometheus/consoles"
+            - "--web.enable-lifecycle"
+          ports:
+            - containerPort: 9090
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9090
+            initialDelaySeconds: 30
+            timeoutSeconds: 30
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: 9090
+            initialDelaySeconds: 30
+            timeoutSeconds: 30
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+            requests:
+              cpu: 500m
+              memory: 1Gi
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/prometheus/prometheus.yml
+              subPath: prometheus.yml
+            - name: rules-volume
+              mountPath: /etc/prometheus/rules
+            - name: prometheus-data
+              mountPath: /prometheus
+          securityContext:
+            runAsUser: 65534  # nobody user
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: config-volume
+          configMap:
+            name: prometheus-config
+        - name: rules-volume
+          configMap:
+            name: prometheus-rules
+        - name: prometheus-data
+          persistentVolumeClaim:
+            claimName: prometheus-data
+---
+# Service for Prometheus
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: molecule-platform
+  labels:
+    app: prometheus
+    component: monitoring
+    part-of: molecule-platform
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+spec:
+  selector:
+    app: prometheus
+    component: monitoring
+  ports:
+    - port: 9090
+      targetPort: 9090
+      name: http
+  type: ClusterIP
