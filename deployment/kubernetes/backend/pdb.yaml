@@ -1,0 +1,22 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: molecule-platform-backend-pdb
+  namespace: molecule-platform
+  labels:
+    app: backend
+    app.kubernetes.io/name: molecule-platform
+    app.kubernetes.io/part-of: molecule-data-platform
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/managed-by: kubectl
+    environment: production
+    tier: application
+  annotations:
+    description: "PodDisruptionBudget for the backend API service of the Molecular Data Management platform"
+    owner: "platform-team"
+    contact: "platform-support@example.com"
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: backend
