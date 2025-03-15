@@ -1,0 +1,100 @@
+{
+  "Type": "AWS::ECS::Service",
+  "Properties": {
+    "ServiceName": "moleculeflow-backend",
+    "Cluster": "${aws_ecs_cluster.main.id}",
+    "TaskDefinition": "${aws_ecs_task_definition.backend.arn}",
+    "DesiredCount": 2,
+    "LaunchType": "FARGATE",
+    "PlatformVersion": "LATEST",
+    "DeploymentController": {
+      "Type": "CODE_DEPLOY"
+    },
+    "DeploymentConfiguration": {
+      "DeploymentCircuitBreaker": {
+        "Enable": true,
+        "Rollback": true
+      },
+      "MaximumPercent": 200,
+      "MinimumHealthyPercent": 100
+    },
+    "NetworkConfiguration": {
+      "AwsvpcConfiguration": {
+        "Subnets": [
+          "${aws_subnet.private_a.id}",
+          "${aws_subnet.private_b.id}",
+          "${aws_subnet.private_c.id}"
+        ],
+        "SecurityGroups": [
+          "${aws_security_group.backend_service.id}"
+        ],
+        "AssignPublicIp": "DISABLED"
+      }
+    },
+    "LoadBalancers": [
+      {
+        "TargetGroupArn": "${aws_lb_target_group.backend.arn}",
+        "ContainerName": "backend-api",
+        "ContainerPort": 8000
+      }
+    ],
+    "HealthCheckGracePeriodSeconds": 60,
+    "SchedulingStrategy": "REPLICA",
+    "EnableECSManagedTags": true,
+    "PropagateTags": "SERVICE",
+    "EnableExecuteCommand": true,
+    "ServiceRegistries": [
+      {
+        "RegistryArn": "${aws_service_discovery_service.backend.arn}",
+        "Port": 8000
+      }
+    ],
+    "Tags": [
+      {
+        "Key": "Name",
+        "Value": "moleculeflow-backend"
+      },
+      {
+        "Key": "Environment",
+        "Value": "${var.environment}"
+      },
+      {
+        "Key": "Project",
+        "Value": "MoleculeFlow"
+      },
+      {
+        "Key": "Service",
+        "Value": "backend-api"
+      }
+    ],
+    "CapacityProviderStrategy": [
+      {
+        "CapacityProvider": "FARGATE",
+        "Weight": 1,
+        "Base": 1
+      },
+      {
+        "CapacityProvider": "FARGATE_SPOT",
+        "Weight": 1,
+        "Base": 0
+      }
+    ],
+    "AutoScalingConfiguration": {
+      "MinCapacity": 2,
+      "MaxCapacity": 20,
+      "ScaleOutCooldown": 180,
+      "ScaleInCooldown": 300,
+      "RequestCountScaling": {
+        "TargetValue": 1000,
+        "ScaleInValue": 500,
+        "ScaleOutAdjustment": 2,
+        "ScaleInAdjustment": -1
+      },
+      "CpuUtilization": {
+        "TargetValue": 70,
+        "ScaleOutThreshold": 75,
+        "ScaleInThreshold": 30
+      }
+    }
+  }
+}
