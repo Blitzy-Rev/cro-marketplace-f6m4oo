@@ -1,0 +1,445 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template for Cognito resources for the Molecular Data Management and CRO Integration Platform'
+
+Parameters:
+  EnvironmentName:
+    Description: Name of the environment (dev, staging, prod)
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+  
+  ProjectName:
+    Description: Name of the project
+    Type: String
+    Default: MoleculeFlow
+  
+  UserPoolName:
+    Description: Name of the Cognito user pool
+    Type: String
+    Default: MoleculeFlowUserPool
+  
+  IdentityPoolName:
+    Description: Name of the Cognito identity pool
+    Type: String
+    Default: MoleculeFlowIdentityPool
+  
+  EnableMFA:
+    Description: Enable multi-factor authentication
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  
+  PasswordMinimumLength:
+    Description: Minimum length for user passwords
+    Type: Number
+    Default: 12
+    MinValue: 8
+  
+  PasswordRequireLowercase:
+    Description: Require lowercase characters in passwords
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  
+  PasswordRequireUppercase:
+    Description: Require uppercase characters in passwords
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  
+  PasswordRequireNumbers:
+    Description: Require numbers in passwords
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  
+  PasswordRequireSymbols:
+    Description: Require symbols in passwords
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  
+  PasswordHistorySize:
+    Description: Number of previous passwords that cannot be reused
+    Type: Number
+    Default: 10
+    MinValue: 0
+  
+  PasswordExpirationInDays:
+    Description: Number of days before password expires
+    Type: Number
+    Default: 90
+    MinValue: 0
+  
+  UserPoolCallbackURLs:
+    Description: Comma-separated list of allowed callback URLs
+    Type: CommaDelimitedList
+    Default: 'http://localhost:3000/callback,https://app.moleculeflow.com/callback'
+  
+  UserPoolLogoutURLs:
+    Description: Comma-separated list of allowed logout URLs
+    Type: CommaDelimitedList
+    Default: 'http://localhost:3000/logout,https://app.moleculeflow.com/logout'
+  
+  AllowUnauthenticatedIdentities:
+    Description: Allow unauthenticated identities in the identity pool
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  
+  S3BucketArns:
+    Description: Comma-separated list of S3 bucket ARNs that authenticated users can access
+    Type: CommaDelimitedList
+  
+  EnableSAMLProvider:
+    Description: Enable SAML identity provider for enterprise federation
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  
+  SAMLMetadataURL:
+    Description: URL of the SAML metadata document
+    Type: String
+    Default: ''
+  
+  SAMLProviderName:
+    Description: Name of the SAML identity provider
+    Type: String
+    Default: 'EnterpriseSSO'
+
+Conditions:
+  EnableMFACondition: !Equals [!Ref EnableMFA, 'true']
+  AllowUnauthenticatedIdentitiesCondition: !Equals [!Ref AllowUnauthenticatedIdentities, 'true']
+  EnableSAMLProviderCondition: !Equals [!Ref EnableSAMLProvider, 'true']
+
+Resources:
+  # Cognito User Pool
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Join ['-', [!Ref UserPoolName, !Ref EnvironmentName]]
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+        InviteMessageTemplate:
+          EmailMessage: 'Your username is {username} and temporary password is {####}. Please login to the Molecular Data Management Platform and change your password.'
+          EmailSubject: 'Your temporary password for the Molecular Data Management Platform'
+          SMSMessage: 'Your username is {username} and temporary password is {####}'
+      AutoVerifiedAttributes:
+        - email
+      EmailVerificationMessage: 'Your verification code is {####}'
+      EmailVerificationSubject: 'Verification code for Molecular Data Management Platform'
+      MfaConfiguration: !If [EnableMFACondition, 'ON', 'OFF']
+      Policies:
+        PasswordPolicy:
+          MinimumLength: !Ref PasswordMinimumLength
+          RequireLowercase: !Ref PasswordRequireLowercase
+          RequireUppercase: !Ref PasswordRequireUppercase
+          RequireNumbers: !Ref PasswordRequireNumbers
+          RequireSymbols: !Ref PasswordRequireSymbols
+          TemporaryPasswordValidityDays: 7
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+        - Name: name
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+        - Name: organization
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+        - Name: role
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+      UsernameAttributes:
+        - email
+      UserPoolAddOns:
+        AdvancedSecurityMode: ENFORCED
+      VerificationMessageTemplate:
+        DefaultEmailOption: CONFIRM_WITH_CODE
+        EmailMessage: 'Your verification code is {####}'
+        EmailSubject: 'Verification code for Molecular Data Management Platform'
+      EnabledMfas: !If [EnableMFACondition, ['SOFTWARE_TOKEN_MFA'], !Ref 'AWS::NoValue']
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      DeviceConfiguration:
+        ChallengeRequiredOnNewDevice: true
+        DeviceOnlyRememberedOnUserPrompt: true
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Cognito User Pool Domain
+  CognitoUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Join ['-', [!Ref ProjectName, !Ref EnvironmentName, !Ref 'AWS::AccountId']]
+      UserPoolId: !Ref CognitoUserPool
+
+  # Cognito User Pool Client
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Join ['-', [!Ref ProjectName, 'web-client', !Ref EnvironmentName]]
+      UserPoolId: !Ref CognitoUserPool
+      AllowedOAuthFlows:
+        - code
+        - implicit
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - phone
+        - email
+        - openid
+        - profile
+        - aws.cognito.signin.user.admin
+      CallbackURLs: !Ref UserPoolCallbackURLs
+      LogoutURLs: !Ref UserPoolLogoutURLs
+      GenerateSecret: false
+      SupportedIdentityProviders: !If [EnableSAMLProviderCondition, ['COGNITO', !Ref SAMLProviderName], ['COGNITO']]
+      PreventUserExistenceErrors: ENABLED
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: 'hours'
+        IdToken: 'hours'
+        RefreshToken: 'days'
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+      EnableTokenRevocation: true
+
+  # SAML Identity Provider (optional)
+  CognitoSAMLProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Condition: EnableSAMLProviderCondition
+    Properties:
+      ProviderName: !Ref SAMLProviderName
+      ProviderType: SAML
+      ProviderDetails:
+        MetadataURL: !Ref SAMLMetadataURL
+      UserPoolId: !Ref CognitoUserPool
+      AttributeMapping:
+        email: email
+        name: name
+        given_name: given_name
+        family_name: family_name
+
+  # Cognito Identity Pool
+  CognitoIdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: !Join ['-', [!Ref IdentityPoolName, !Ref EnvironmentName]]
+      AllowUnauthenticatedIdentities: !Equals [!Ref AllowUnauthenticatedIdentities, 'true']
+      CognitoIdentityProviders:
+        - ClientId: !Ref CognitoUserPoolClient
+          ProviderName: !GetAtt CognitoUserPool.ProviderName
+          ServerSideTokenCheck: true
+
+  # IAM Role for Authenticated Users
+  CognitoAuthenticatedRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [!Ref ProjectName, 'cognito-authenticated', !Ref EnvironmentName]]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'cognito-identity.amazonaws.com:aud': !Ref CognitoIdentityPool
+              'ForAnyValue:StringLike':
+                'cognito-identity.amazonaws.com:amr': authenticated
+      Policies:
+        - PolicyName: CognitoAuthenticatedPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - mobileanalytics:PutEvents
+                  - cognito-sync:*
+                  - cognito-identity:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Join ['', [!Select ['0', !Ref S3BucketArns], '/private/${cognito-identity.amazonaws.com:sub}/*']]
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Join ['', [!Select ['0', !Ref S3BucketArns], '/protected/*']]
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Join ['', [!Select ['0', !Ref S3BucketArns], '/public/*']]
+
+  # IAM Role for Unauthenticated Users (optional)
+  CognitoUnauthenticatedRole:
+    Type: AWS::IAM::Role
+    Condition: AllowUnauthenticatedIdentitiesCondition
+    Properties:
+      RoleName: !Join ['-', [!Ref ProjectName, 'cognito-unauthenticated', !Ref EnvironmentName]]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'cognito-identity.amazonaws.com:aud': !Ref CognitoIdentityPool
+              'ForAnyValue:StringLike':
+                'cognito-identity.amazonaws.com:amr': unauthenticated
+      Policies:
+        - PolicyName: CognitoUnauthenticatedPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - mobileanalytics:PutEvents
+                  - cognito-sync:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Join ['', [!Select ['0', !Ref S3BucketArns], '/public/*']]
+
+  # Identity Pool Role Attachment
+  CognitoIdentityPoolRoleAttachment:
+    Type: AWS::Cognito::IdentityPoolRoleAttachment
+    Properties:
+      IdentityPoolId: !Ref CognitoIdentityPool
+      Roles:
+        authenticated: !GetAtt CognitoAuthenticatedRole.Arn
+        unauthenticated: !If [AllowUnauthenticatedIdentitiesCondition, !GetAtt CognitoUnauthenticatedRole.Arn, !Ref 'AWS::NoValue']
+
+  # User Pool Groups for Role-Based Access Control
+  CognitoUserPoolGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Administrators
+      Description: Administrator group with full system access
+      Precedence: 1
+      UserPoolId: !Ref CognitoUserPool
+
+  CognitoUserPoolGroupPharma:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: PharmaUsers
+      Description: Pharmaceutical users with molecule management and CRO submission capabilities
+      Precedence: 2
+      UserPoolId: !Ref CognitoUserPool
+
+  CognitoUserPoolGroupCRO:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: CROUsers
+      Description: CRO users with submission management and result upload capabilities
+      Precedence: 3
+      UserPoolId: !Ref CognitoUserPool
+
+  # Resource Server for Custom Scopes
+  CognitoUserPoolResourceServer:
+    Type: AWS::Cognito::UserPoolResourceServer
+    Properties:
+      Identifier: !Join ['', ['https://api.', !Ref ProjectName, '.com']]
+      Name: MoleculeFlowAPI
+      UserPoolId: !Ref CognitoUserPool
+      Scopes:
+        - ScopeName: molecules.read
+          ScopeDescription: Read access to molecules
+        - ScopeName: molecules.write
+          ScopeDescription: Write access to molecules
+        - ScopeName: libraries.read
+          ScopeDescription: Read access to libraries
+        - ScopeName: libraries.write
+          ScopeDescription: Write access to libraries
+        - ScopeName: submissions.read
+          ScopeDescription: Read access to submissions
+        - ScopeName: submissions.write
+          ScopeDescription: Write access to submissions
+        - ScopeName: results.read
+          ScopeDescription: Read access to results
+        - ScopeName: results.write
+          ScopeDescription: Write access to results
+        - ScopeName: admin
+          ScopeDescription: Administrative access
+
+Outputs:
+  UserPoolId:
+    Description: ID of the Cognito user pool
+    Value: !Ref CognitoUserPool
+    Export:
+      Name: !Sub '${AWS::StackName}-UserPoolId'
+
+  UserPoolArn:
+    Description: ARN of the Cognito user pool
+    Value: !GetAtt CognitoUserPool.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-UserPoolArn'
+
+  UserPoolClientId:
+    Description: ID of the Cognito user pool client
+    Value: !Ref CognitoUserPoolClient
+    Export:
+      Name: !Sub '${AWS::StackName}-UserPoolClientId'
+
+  UserPoolDomain:
+    Description: Domain of the Cognito user pool
+    Value: !Join ['', [!Ref CognitoUserPoolDomain, '.auth.', !Ref 'AWS::Region', '.amazoncognito.com']]
+    Export:
+      Name: !Sub '${AWS::StackName}-UserPoolDomain'
+
+  IdentityPoolId:
+    Description: ID of the Cognito identity pool
+    Value: !Ref CognitoIdentityPool
+    Export:
+      Name: !Sub '${AWS::StackName}-IdentityPoolId'
+
+  AuthenticatedRoleArn:
+    Description: ARN of the authenticated role
+    Value: !GetAtt CognitoAuthenticatedRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-AuthenticatedRoleArn'
+
+  UnauthenticatedRoleArn:
+    Condition: AllowUnauthenticatedIdentitiesCondition
+    Description: ARN of the unauthenticated role
+    Value: !GetAtt CognitoUnauthenticatedRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-UnauthenticatedRoleArn'
