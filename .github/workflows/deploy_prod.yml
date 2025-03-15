@@ -1,0 +1,377 @@
+name: Deploy to Production
+
+on:
+  workflow_run:
+    workflows: [Deploy to Staging]
+    branches: [main]
+    types: [completed]
+    conclusion: [success]
+  workflow_dispatch:
+    inputs:
+      deploy_infrastructure:
+        description: Deploy infrastructure changes
+        required: false
+        default: 'false'
+        type: boolean
+      deployment_approval_id:
+        description: ID of the approved staging deployment
+        required: true
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - infrastructure/terraform/environments/prod/**
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY_BACKEND: molecule-flow/backend
+  ECR_REPOSITORY_FRONTEND: molecule-flow/frontend
+  ECS_CLUSTER: molecule-flow-prod
+  ECS_SERVICE_BACKEND: backend-service
+  ECS_SERVICE_FRONTEND: frontend-service
+  ECS_SERVICE_WORKER: worker-service
+  ENVIRONMENT: prod
+  CANARY_INITIAL_PERCENT: '10'
+  CANARY_SECOND_PERCENT: '50'
+  HEALTH_CHECK_INTERVAL: '60'
+  HEALTH_CHECK_THRESHOLD: '5'
+  DEPLOYMENT_TIMEOUT: '3600'
+
+jobs:
+  deploy_backend:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download task definition
+        run: aws ecs describe-task-definition --task-definition molecule-flow-backend-prod --query taskDefinition > task-definition.json
+
+      - name: Fill in the new image ID in the Amazon ECS task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: backend-api
+          image: ${{ secrets.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_BACKEND }}:${{ github.sha }}
+
+      - name: Deploy Amazon ECS task definition - Initial Canary (10%)
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE_BACKEND }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: 'true'
+          codedeploy-appspec: deployment/ecs/appspec/backend-prod-canary.json
+          codedeploy-application: molecule-flow-backend-prod
+          codedeploy-deployment-group: molecule-flow-backend-prod-dg
+          codedeploy-deployment-config: CodeDeployDefault.ECSCanary10Percent5Minutes
+
+      - name: Monitor initial deployment health
+        run: bash deployment/scripts/health_check.sh --service backend --environment prod --threshold ${{ env.HEALTH_CHECK_THRESHOLD }} --interval ${{ env.HEALTH_CHECK_INTERVAL }}
+
+      - name: Update Canary deployment to 50%
+        if: ${{ success() }}
+        run: aws deploy update-deployment-group --application-name molecule-flow-backend-prod --current-deployment-group-name molecule-flow-backend-prod-dg --deployment-config-name CodeDeployDefault.ECSCanary50Percent5Minutes
+
+      - name: Monitor 50% deployment health
+        if: ${{ success() }}
+        run: bash deployment/scripts/health_check.sh --service backend --environment prod --threshold ${{ env.HEALTH_CHECK_THRESHOLD }} --interval ${{ env.HEALTH_CHECK_INTERVAL }}
+
+      - name: Complete Canary deployment (100%)
+        if: ${{ success() }}
+        run: aws deploy update-deployment-group --application-name molecule-flow-backend-prod --current-deployment-group-name molecule-flow-backend-prod-dg --deployment-config-name CodeDeployDefault.ECSAllAtOnce
+
+      - name: Rollback on failure
+        if: ${{ failure() }}
+        run: bash deployment/scripts/rollback.sh --service backend --environment prod
+
+      - name: Forward deployment metrics to Datadog
+        uses: datadog/cloudwatch-forwarder-action@v1
+        with:
+          api-key: ${{ secrets.DATADOG_API_KEY }}
+          application-key: ${{ secrets.DATADOG_APP_KEY }}
+          service-name: backend-api
+          env: production
+
+  deploy_frontend:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download task definition
+        run: aws ecs describe-task-definition --task-definition molecule-flow-frontend-prod --query taskDefinition > task-definition.json
+
+      - name: Fill in the new image ID in the Amazon ECS task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: frontend-web
+          image: ${{ secrets.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_FRONTEND }}:${{ github.sha }}
+
+      - name: Deploy Amazon ECS task definition - Initial Canary (10%)
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE_FRONTEND }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: 'true'
+          codedeploy-appspec: deployment/ecs/appspec/frontend-prod-canary.json
+          codedeploy-application: molecule-flow-frontend-prod
+          codedeploy-deployment-group: molecule-flow-frontend-prod-dg
+          codedeploy-deployment-config: CodeDeployDefault.ECSCanary10Percent5Minutes
+
+      - name: Monitor initial deployment health
+        run: bash deployment/scripts/health_check.sh --service frontend --environment prod --threshold ${{ env.HEALTH_CHECK_THRESHOLD }} --interval ${{ env.HEALTH_CHECK_INTERVAL }}
+
+      - name: Update Canary deployment to 50%
+        if: ${{ success() }}
+        run: aws deploy update-deployment-group --application-name molecule-flow-frontend-prod --current-deployment-group-name molecule-flow-frontend-prod-dg --deployment-config-name CodeDeployDefault.ECSCanary50Percent5Minutes
+
+      - name: Monitor 50% deployment health
+        if: ${{ success() }}
+        run: bash deployment/scripts/health_check.sh --service frontend --environment prod --threshold ${{ env.HEALTH_CHECK_THRESHOLD }} --interval ${{ env.HEALTH_CHECK_INTERVAL }}
+
+      - name: Complete Canary deployment (100%)
+        if: ${{ success() }}
+        run: aws deploy update-deployment-group --application-name molecule-flow-frontend-prod --current-deployment-group-name molecule-flow-frontend-prod-dg --deployment-config-name CodeDeployDefault.ECSAllAtOnce
+
+      - name: Rollback on failure
+        if: ${{ failure() }}
+        run: bash deployment/scripts/rollback.sh --service frontend --environment prod
+
+      - name: Forward deployment metrics to Datadog
+        uses: datadog/cloudwatch-forwarder-action@v1
+        with:
+          api-key: ${{ secrets.DATADOG_API_KEY }}
+          application-key: ${{ secrets.DATADOG_APP_KEY }}
+          service-name: frontend-web
+          env: production
+
+  deploy_workers:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download task definition
+        run: aws ecs describe-task-definition --task-definition molecule-flow-worker-prod --query taskDefinition > task-definition.json
+
+      - name: Fill in the new image ID in the Amazon ECS task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: worker
+          image: ${{ secrets.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_BACKEND }}:${{ github.sha }}
+
+      - name: Deploy Amazon ECS task definition - Initial Canary (10%)
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE_WORKER }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: 'true'
+          codedeploy-appspec: deployment/ecs/appspec/worker-prod-canary.json
+          codedeploy-application: molecule-flow-worker-prod
+          codedeploy-deployment-group: molecule-flow-worker-prod-dg
+          codedeploy-deployment-config: CodeDeployDefault.ECSCanary10Percent5Minutes
+
+      - name: Monitor initial deployment health
+        run: bash deployment/scripts/health_check.sh --service worker --environment prod --threshold ${{ env.HEALTH_CHECK_THRESHOLD }} --interval ${{ env.HEALTH_CHECK_INTERVAL }}
+
+      - name: Update Canary deployment to 50%
+        if: ${{ success() }}
+        run: aws deploy update-deployment-group --application-name molecule-flow-worker-prod --current-deployment-group-name molecule-flow-worker-prod-dg --deployment-config-name CodeDeployDefault.ECSCanary50Percent5Minutes
+
+      - name: Monitor 50% deployment health
+        if: ${{ success() }}
+        run: bash deployment/scripts/health_check.sh --service worker --environment prod --threshold ${{ env.HEALTH_CHECK_THRESHOLD }} --interval ${{ env.HEALTH_CHECK_INTERVAL }}
+
+      - name: Complete Canary deployment (100%)
+        if: ${{ success() }}
+        run: aws deploy update-deployment-group --application-name molecule-flow-worker-prod --current-deployment-group-name molecule-flow-worker-prod-dg --deployment-config-name CodeDeployDefault.ECSAllAtOnce
+
+      - name: Rollback on failure
+        if: ${{ failure() }}
+        run: bash deployment/scripts/rollback.sh --service worker --environment prod
+
+      - name: Forward deployment metrics to Datadog
+        uses: datadog/cloudwatch-forwarder-action@v1
+        with:
+          api-key: ${{ secrets.DATADOG_API_KEY }}
+          application-key: ${{ secrets.DATADOG_APP_KEY }}
+          service-name: worker-service
+          env: production
+
+  update_infrastructure:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.deploy_infrastructure == 'true' || github.event_name == 'push' }}
+    environment:
+      name: production-infrastructure
+      url: https://console.aws.amazon.com/cloudformation/home
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: '1.5.0'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        working-directory: infrastructure/terraform/environments/prod
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: infrastructure/terraform/environments/prod
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: infrastructure/terraform/environments/prod
+        run: terraform apply -auto-approve tfplan
+
+  run_health_checks:
+    runs-on: ubuntu-latest
+    needs: [deploy_backend, deploy_frontend, deploy_workers]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get API endpoint
+        id: get-endpoint
+        run: echo "API_ENDPOINT=$(aws cloudformation describe-stacks --stack-name molecule-flow-prod --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' --output text)" >> $GITHUB_ENV
+
+      - name: Get Frontend URL
+        id: get-frontend-url
+        run: echo "FRONTEND_URL=$(aws cloudformation describe-stacks --stack-name molecule-flow-prod --query 'Stacks[0].Outputs[?OutputKey==`FrontendURL`].OutputValue' --output text)" >> $GITHUB_ENV
+
+      - name: Wait for services to be stable
+        run: sleep 120
+
+      - name: Run health check
+        run: curl -f ${{ env.API_ENDPOINT }}/api/v1/health || exit 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install test dependencies
+        working-directory: src/backend
+        run: pip install -r requirements.txt
+
+      - name: Run API health checks
+        working-directory: src/backend
+        run: python -m pytest tests/api/test_health.py -v
+        env:
+          API_BASE_URL: ${{ env.API_ENDPOINT }}
+          TEST_ENVIRONMENT: production
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Cypress
+        working-directory: src/web
+        run: npm install cypress
+
+      - name: Run critical path tests
+        working-directory: src/web
+        run: npx cypress run --spec 'cypress/e2e/critical_paths/**/*.cy.js'
+        env:
+          CYPRESS_BASE_URL: ${{ env.FRONTEND_URL }}
+          CYPRESS_API_URL: ${{ env.API_ENDPOINT }}
+
+      - name: Generate health check report
+        run: echo 'Production health checks completed successfully' > health-report.txt
+
+      - name: Upload health check report
+        uses: actions/upload-artifact@v3
+        with:
+          name: production-health-report
+          path: health-report.txt
+
+  notify_deployment_status:
+    runs-on: ubuntu-latest
+    needs: [run_health_checks]
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Generate deployment summary
+        run: echo "Deployment Status: ${{ needs.run_health_checks.result == 'success' && 'SUCCESS' || 'FAILURE' }}" > deployment-summary.txt
+
+      - name: Add deployment details
+        run: echo "Deployed Version: ${{ github.sha }}" >> deployment-summary.txt && echo "Deployment Time: $(date)" >> deployment-summary.txt && echo "Deployed By: ${{ github.actor }}" >> deployment-summary.txt
+
+      - name: Send email notification
+        if: ${{ secrets.NOTIFICATION_EMAIL != '' }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "Production Deployment ${{ needs.run_health_checks.result == 'success' && 'Successful' || 'Failed' }}"
+          body: file://deployment-summary.txt
+          to: ${{ secrets.NOTIFICATION_EMAIL }}
+          from: GitHub Actions <noreply@github.com>
+
+      - name: Create deployment record
+        run: aws dynamodb put-item --table-name molecule-flow-deployments --item '{"environment":{"S":"production"},"timestamp":{"S":"'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"},"status":{"S":"${{ needs.run_health_checks.result == 'success' && 'SUCCESS' || 'FAILURE' }}"},"version":{"S":"${{ github.sha }}"},"deployer":{"S":"${{ github.actor }}"},"workflow_id":{"S":"${{ github.run_id }}"}}'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+
+      - name: Upload deployment record
+        uses: actions/upload-artifact@v3
+        with:
+          name: deployment-record
+          path: deployment-summary.txt
