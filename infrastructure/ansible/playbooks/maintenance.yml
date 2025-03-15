@@ -1,0 +1,420 @@
+---
+# Molecular Platform Maintenance Playbook
+# Performs routine maintenance tasks to ensure system reliability and security
+# Handles updates, database optimization, log rotation, backup verification, and compliance checks
+
+- name: Molecular Platform Maintenance
+  hosts: all
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../vars/common.yml
+    - "../vars/{{ environment }}.yml"
+
+  pre_tasks:
+    - name: Check if Ansible can connect to the host
+      ping:
+
+    - name: Gather server information
+      setup:
+        gather_subset:
+          - hardware
+          - network
+          - virtual
+
+    - name: Set maintenance variables
+      set_fact:
+        maintenance_id: "{{ ansible_date_time.iso8601_basic_short }}"
+        maintenance_type: "{{ maintenance_type | default('routine') }}"
+        maintenance_log: "{{ app_base_dir }}/logs/maintenance-{{ ansible_date_time.iso8601_basic_short }}.log"
+
+    - name: Create maintenance log file
+      file:
+        path: "{{ maintenance_log }}"
+        state: touch
+        owner: molecule-app
+        group: molecule-app
+        mode: '0644'
+
+    - name: Display maintenance information
+      debug:
+        msg: "Starting maintenance ID {{ maintenance_id }} on {{ environment }} environment ({{ maintenance_type }})"
+
+  tasks:
+    - name: System Updates
+      block:
+        - name: Update apt cache (Debian)
+          apt:
+            update_cache: true
+            cache_valid_time: 3600
+          when: ansible_os_family == 'Debian'
+
+        - name: Update yum cache (RedHat)
+          yum:
+            update_cache: true
+          when: ansible_os_family == 'RedHat'
+
+        - name: Install security updates (Debian)
+          apt:
+            upgrade: security
+            update_cache: true
+          when: ansible_os_family == 'Debian' and apply_security_updates | default(true)
+
+        - name: Install security updates (RedHat)
+          yum:
+            name: '*'
+            security: true
+            state: latest
+          when: ansible_os_family == 'RedHat' and apply_security_updates | default(true)
+
+        - name: Check if reboot is required (Debian)
+          stat:
+            path: /var/run/reboot-required
+          register: reboot_required
+          when: ansible_os_family == 'Debian'
+
+        - name: Notify about required reboot
+          debug:
+            msg: "Reboot is required on {{ inventory_hostname }}"
+          when: reboot_required.stat.exists is defined and reboot_required.stat.exists
+      tags:
+        - system
+        - updates
+
+    - name: Docker Maintenance
+      block:
+        - name: Prune unused Docker images
+          community.docker.docker_prune:
+            images: true
+            images_filters:
+              dangling: true
+
+        - name: Prune unused Docker volumes
+          community.docker.docker_prune:
+            volumes: true
+
+        - name: Prune Docker networks
+          community.docker.docker_prune:
+            networks: true
+
+        - name: Check Docker disk usage
+          command: docker system df
+          register: docker_df
+          changed_when: false
+
+        - name: Display Docker disk usage
+          debug:
+            var: docker_df.stdout_lines
+      when: inventory_hostname in groups['docker_hosts'] | default(groups['all'])
+      tags:
+        - docker
+        - cleanup
+
+    - name: Database Maintenance
+      block:
+        - name: Get database credentials
+          include_vars:
+            file: "{{ app_base_dir }}/backend/config/.db_credentials"
+            name: db_credentials
+
+        - name: Run VACUUM ANALYZE
+          community.postgresql.postgresql_query:
+            db: "{{ db_credentials.database }}"
+            login_host: "{{ db_credentials.host }}"
+            login_user: "{{ db_credentials.username }}"
+            login_password: "{{ db_credentials.password }}"
+            query: "VACUUM ANALYZE;"
+
+        - name: Update PostgreSQL statistics
+          community.postgresql.postgresql_query:
+            db: "{{ db_credentials.database }}"
+            login_host: "{{ db_credentials.host }}"
+            login_user: "{{ db_credentials.username }}"
+            login_password: "{{ db_credentials.password }}"
+            query: "SELECT pg_stat_reset();"
+
+        - name: Identify bloated tables
+          community.postgresql.postgresql_query:
+            db: "{{ db_credentials.database }}"
+            login_host: "{{ db_credentials.host }}"
+            login_user: "{{ db_credentials.username }}"
+            login_password: "{{ db_credentials.password }}"
+            query: "SELECT schemaname, relname, n_dead_tup, last_vacuum FROM pg_stat_user_tables ORDER BY n_dead_tup DESC LIMIT 10;"
+          register: bloated_tables
+
+        - name: Display bloated tables
+          debug:
+            var: bloated_tables.query_result
+
+        - name: VACUUM FULL bloated tables
+          community.postgresql.postgresql_query:
+            db: "{{ db_credentials.database }}"
+            login_host: "{{ db_credentials.host }}"
+            login_user: "{{ db_credentials.username }}"
+            login_password: "{{ db_credentials.password }}"
+            query: "VACUUM FULL ANALYZE {{ item.schemaname }}.{{ item.relname }};"
+          loop: "{{ bloated_tables.query_result }}"
+          when: item.n_dead_tup|int > 10000
+
+        - name: Reindex database
+          community.postgresql.postgresql_query:
+            db: "{{ db_credentials.database }}"
+            login_host: "{{ db_credentials.host }}"
+            login_user: "{{ db_credentials.username }}"
+            login_password: "{{ db_credentials.password }}"
+            query: "REINDEX DATABASE {{ db_credentials.database }};"
+          when: perform_reindex | default(false)
+      when: inventory_hostname in groups['database_servers'] | default(groups['backend_servers'])
+      tags:
+        - database
+        - maintenance
+
+    - name: Log Rotation
+      block:
+        - name: Rotate application logs
+          command: logrotate -f /etc/logrotate.d/molecule-app
+
+        - name: Compress old logs
+          find:
+            paths: "{{ app_base_dir }}/logs"
+            patterns: "*.log.*"
+            age: "7d"
+            recurse: true
+          register: old_logs
+
+        - name: Compress log files
+          archive:
+            path: "{{ item.path }}"
+            dest: "{{ item.path }}.gz"
+            format: gz
+            remove: true
+          loop: "{{ old_logs.files }}"
+          when: not item.path.endswith('.gz')
+
+        - name: Clean up old compressed logs
+          find:
+            paths: "{{ app_base_dir }}/logs"
+            patterns: "*.gz"
+            age: "{{ log_retention_days | default(90) }}d"
+            recurse: true
+          register: expired_logs
+
+        - name: Remove expired logs
+          file:
+            path: "{{ item.path }}"
+            state: absent
+          loop: "{{ expired_logs.files }}"
+      tags:
+        - logs
+        - rotation
+
+    - name: Backup Verification
+      block:
+        - name: Get latest database backup
+          shell: "aws s3 ls s3://{{ backup_bucket }}/database/ --recursive | sort | tail -n 1 | awk '{print $4}'"
+          register: latest_db_backup
+          changed_when: false
+
+        - name: Verify database backup
+          script: ../../scripts/backup.sh verify-backup --type=database --file={{ latest_db_backup.stdout }}
+          register: db_backup_verification
+          changed_when: false
+          failed_when: db_backup_verification.rc != 0
+
+        - name: Get latest document backup
+          shell: "aws s3 ls s3://{{ backup_bucket }}/documents/ --recursive | sort | tail -n 1 | awk '{print $4}'"
+          register: latest_doc_backup
+          changed_when: false
+
+        - name: Verify document backup
+          script: ../../scripts/backup.sh verify-backup --type=documents --file={{ latest_doc_backup.stdout }}
+          register: doc_backup_verification
+          changed_when: false
+          failed_when: doc_backup_verification.rc != 0
+
+        - name: Perform test restore (if scheduled)
+          script: ../../scripts/backup.sh test-restore --type=database --environment={{ environment }}
+          when: perform_test_restore | default(false)
+          register: test_restore
+          changed_when: false
+          failed_when: test_restore.rc != 0
+      when: inventory_hostname in groups['backup_servers'] | default(groups['backend_servers'])
+      tags:
+        - backup
+        - verification
+
+    - name: Security Compliance Checks
+      block:
+        - name: Check for failed SSH login attempts
+          shell: "grep 'Failed password' /var/log/auth.log | wc -l"
+          register: failed_logins
+          changed_when: false
+          when: ansible_os_family == 'Debian'
+
+        - name: Check for failed SSH login attempts (RedHat)
+          shell: "grep 'Failed password' /var/log/secure | wc -l"
+          register: failed_logins_redhat
+          changed_when: false
+          when: ansible_os_family == 'RedHat'
+
+        - name: Alert on excessive failed logins
+          debug:
+            msg: "WARNING: Excessive failed login attempts detected: {{ failed_logins.stdout|int if ansible_os_family == 'Debian' else failed_logins_redhat.stdout|int }}"
+          when: (failed_logins.stdout|int > 10) or (failed_logins_redhat.stdout|int > 10)
+
+        - name: Check for unauthorized sudo usage
+          shell: "grep 'COMMAND' /var/log/auth.log | grep -v 'molecule-app\\|ansible' | wc -l"
+          register: sudo_usage
+          changed_when: false
+          when: ansible_os_family == 'Debian'
+
+        - name: Check for unauthorized sudo usage (RedHat)
+          shell: "grep 'COMMAND' /var/log/secure | grep -v 'molecule-app\\|ansible' | wc -l"
+          register: sudo_usage_redhat
+          changed_when: false
+          when: ansible_os_family == 'RedHat'
+
+        - name: Alert on unauthorized sudo usage
+          debug:
+            msg: "WARNING: Unauthorized sudo usage detected: {{ sudo_usage.stdout|int if ansible_os_family == 'Debian' else sudo_usage_redhat.stdout|int }}"
+          when: (sudo_usage.stdout|int > 0) or (sudo_usage_redhat.stdout|int > 0)
+
+        - name: Check for available security updates
+          shell: apt-get -s upgrade | grep -i security | wc -l
+          register: security_updates
+          changed_when: false
+          when: ansible_os_family == 'Debian'
+
+        - name: Check for available security updates (RedHat)
+          shell: "yum check-update --security | grep -v 'Load' | wc -l"
+          register: security_updates_redhat
+          changed_when: false
+          when: ansible_os_family == 'RedHat'
+
+        - name: Alert on pending security updates
+          debug:
+            msg: "WARNING: {{ security_updates.stdout|int if ansible_os_family == 'Debian' else security_updates_redhat.stdout|int }} security updates available"
+          when: (security_updates.stdout|int > 0) or (security_updates_redhat.stdout|int > 0)
+
+        - name: Check Docker image vulnerabilities
+          shell: 'trivy image {{ ecr_registry }}/{{ ecr_repository_backend }}:{{ image_tag }} --severity HIGH,CRITICAL --no-progress'
+          register: image_vulnerabilities
+          changed_when: false
+          when: inventory_hostname in groups['docker_hosts'] | default(groups['all'])
+
+        - name: Alert on Docker image vulnerabilities
+          debug:
+            msg: "WARNING: Security vulnerabilities found in Docker images"
+          when: image_vulnerabilities.rc != 0
+      tags:
+        - security
+        - compliance
+
+    - name: Temporary File Cleanup
+      block:
+        - name: Clean up temporary files
+          script: ../../scripts/cleanup.sh --type=temp --environment={{ environment }}
+          register: temp_cleanup
+          changed_when: temp_cleanup.stdout|length > 0
+
+        - name: Clean up old deployment artifacts
+          find:
+            paths: "{{ app_base_dir }}/deployments"
+            age: "{{ deployment_retention_days | default(30) }}d"
+            recurse: true
+            file_type: directory
+            patterns: "20*"
+            excludes: 
+              - current
+              - "{{ app_base_dir }}/deployments/current"
+          register: old_deployments
+
+        - name: Remove old deployment directories
+          file:
+            path: "{{ item.path }}"
+            state: absent
+          loop: "{{ old_deployments.files }}"
+      tags:
+        - cleanup
+        - temp
+
+  handlers:
+    - name: Restart Docker
+      service:
+        name: docker
+        state: restarted
+
+    - name: Restart PostgreSQL
+      service:
+        name: postgresql
+        state: restarted
+
+    - name: Restart Nginx
+      service:
+        name: nginx
+        state: restarted
+
+  post_tasks:
+    - name: Verify system status
+      block:
+        - name: Check system load
+          shell: uptime
+          register: system_load
+          changed_when: false
+
+        - name: Check disk usage
+          shell: df -h
+          register: disk_usage
+          changed_when: false
+
+        - name: Check memory usage
+          shell: free -m
+          register: memory_usage
+          changed_when: false
+
+        - name: Display system status
+          debug:
+            msg:
+              - "System Load: {{ system_load.stdout }}"
+              - "Disk Usage: {{ disk_usage.stdout_lines }}"
+              - "Memory Usage: {{ memory_usage.stdout_lines }}"
+
+        - name: Check service status
+          shell: systemctl status {{ item }} | grep Active
+          register: service_status
+          changed_when: false
+          loop:
+            - docker
+            - nginx
+            - postgresql
+            - amazon-cloudwatch-agent
+          ignore_errors: true
+
+        - name: Display service status
+          debug:
+            msg: "{{ item.item }}: {{ item.stdout }}"
+          loop: "{{ service_status.results }}"
+      tags:
+        - verification
+
+    - name: Record maintenance completion
+      block:
+        - name: Update maintenance log
+          lineinfile:
+            path: "{{ app_base_dir }}/logs/maintenance-history.log"
+            line: "{{ ansible_date_time.iso8601 }} - Maintenance {{ maintenance_id }} completed on {{ inventory_hostname }} ({{ environment }}) - Type: {{ maintenance_type }}"
+            create: true
+
+        - name: Send maintenance notification
+          uri:
+            url: "{{ slack_webhook_url }}"
+            method: POST
+            body_format: json
+            body:
+              text: "Maintenance completed for {{ environment }} environment.\nMaintenance ID: {{ maintenance_id }}\nType: {{ maintenance_type }}\nTimestamp: {{ ansible_date_time.iso8601 }}"
+          when: slack_webhook_url is defined and inventory_hostname == groups['backend_servers'][0]
+          delegate_to: localhost
+          tags:
+            - notification
+      tags:
+        - logging
