@@ -1,0 +1,260 @@
+name: Deploy to Staging
+
+on:
+  workflow_run:
+    workflows: [Backend CI, Frontend CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      deploy_infrastructure:
+        description: 'Deploy infrastructure changes'
+        required: false
+        default: 'false'
+        type: boolean
+  push:
+    branches: [main]
+    paths:
+      - 'infrastructure/terraform/environments/staging/**'
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY_BACKEND: molecule-flow/backend
+  ECR_REPOSITORY_FRONTEND: molecule-flow/frontend
+  ECS_CLUSTER: molecule-flow-staging
+  ECS_SERVICE_BACKEND: backend-service
+  ECS_SERVICE_FRONTEND: frontend-service
+  ECS_SERVICE_WORKER: worker-service
+  ENVIRONMENT: staging
+
+jobs:
+  deploy_backend:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.name == 'Backend CI' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Download task definition
+        run: aws ecs describe-task-definition --task-definition molecule-flow-backend-staging --query taskDefinition > task-definition.json
+      
+      - name: Fill in the new image ID in the Amazon ECS task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: backend-api
+          image: ${{ secrets.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_BACKEND }}:${{ github.sha }}
+      
+      - name: Deploy Amazon ECS task definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE_BACKEND }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+          codedeploy-appspec: deployment/ecs/appspec/backend-staging.json
+          codedeploy-application: molecule-flow-backend-staging
+          codedeploy-deployment-group: molecule-flow-backend-staging-dg
+
+  deploy_frontend:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.name == 'Frontend CI' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Download task definition
+        run: aws ecs describe-task-definition --task-definition molecule-flow-frontend-staging --query taskDefinition > task-definition.json
+      
+      - name: Fill in the new image ID in the Amazon ECS task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: frontend-web
+          image: ${{ secrets.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_FRONTEND }}:${{ github.sha }}
+      
+      - name: Deploy Amazon ECS task definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE_FRONTEND }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+          codedeploy-appspec: deployment/ecs/appspec/frontend-staging.json
+          codedeploy-application: molecule-flow-frontend-staging
+          codedeploy-deployment-group: molecule-flow-frontend-staging-dg
+
+  deploy_workers:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.name == 'Backend CI' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Download task definition
+        run: aws ecs describe-task-definition --task-definition molecule-flow-worker-staging --query taskDefinition > task-definition.json
+      
+      - name: Fill in the new image ID in the Amazon ECS task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: worker
+          image: ${{ secrets.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_BACKEND }}:${{ github.sha }}
+      
+      - name: Deploy Amazon ECS task definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE_WORKER }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+          codedeploy-appspec: deployment/ecs/appspec/worker-staging.json
+          codedeploy-application: molecule-flow-worker-staging
+          codedeploy-deployment-group: molecule-flow-worker-staging-dg
+
+  update_infrastructure:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.deploy_infrastructure == 'true' || github.event_name == 'push' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: '1.5.0'
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Terraform Init
+        working-directory: infrastructure/terraform/environments/staging
+        run: terraform init
+      
+      - name: Terraform Plan
+        working-directory: infrastructure/terraform/environments/staging
+        run: terraform plan -out=tfplan
+      
+      - name: Terraform Apply
+        working-directory: infrastructure/terraform/environments/staging
+        run: terraform apply -auto-approve tfplan
+
+  run_integration_tests:
+    runs-on: ubuntu-latest
+    needs: [deploy_backend, deploy_frontend, deploy_workers]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Get API endpoint
+        id: get-endpoint
+        run: echo "API_ENDPOINT=$(aws cloudformation describe-stacks --stack-name molecule-flow-staging --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' --output text)" >> $GITHUB_ENV
+      
+      - name: Get Frontend URL
+        id: get-frontend-url
+        run: echo "FRONTEND_URL=$(aws cloudformation describe-stacks --stack-name molecule-flow-staging --query 'Stacks[0].Outputs[?OutputKey==`FrontendURL`].OutputValue' --output text)" >> $GITHUB_ENV
+      
+      - name: Wait for services to be stable
+        run: sleep 120
+      
+      - name: Run health check
+        run: curl -f ${{ env.API_ENDPOINT }}/api/v1/health || exit 1
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: Install test dependencies
+        working-directory: src/backend
+        run: pip install -r requirements.txt
+      
+      - name: Run API integration tests
+        working-directory: src/backend
+        run: python -m pytest tests/api/ -v
+        env:
+          API_BASE_URL: ${{ env.API_ENDPOINT }}
+          TEST_ENVIRONMENT: staging
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      
+      - name: Install Cypress
+        working-directory: src/web
+        run: npm install cypress
+      
+      - name: Run E2E tests
+        working-directory: src/web
+        run: npx cypress run
+        env:
+          CYPRESS_BASE_URL: ${{ env.FRONTEND_URL }}
+          CYPRESS_API_URL: ${{ env.API_ENDPOINT }}
+      
+      - name: Generate test report
+        run: echo 'Integration tests completed successfully' > test-report.txt
+      
+      - name: Upload test report
+        uses: actions/upload-artifact@v3
+        with:
+          name: integration-test-report
+          path: test-report.txt
+
+  approve_deployment:
+    runs-on: ubuntu-latest
+    needs: [run_integration_tests]
+    environment:
+      name: production-approval
+      url: ${{ steps.get-frontend-url.outputs.url }}
+    steps:
+      - name: Get Frontend URL
+        id: get-frontend-url
+        run: echo "url=$(aws cloudformation describe-stacks --stack-name molecule-flow-staging --query 'Stacks[0].Outputs[?OutputKey==`FrontendURL`].OutputValue' --output text)" >> $GITHUB_OUTPUT
+      
+      - name: Approval received
+        run: echo 'Deployment to staging has been approved for promotion to production'
+      
+      - name: Record approval
+        run: echo "Approved by: ${{ github.actor }} at $(date)" > approval.txt
+      
+      - name: Upload approval record
+        uses: actions/upload-artifact@v3
+        with:
+          name: deployment-approval
+          path: approval.txt
