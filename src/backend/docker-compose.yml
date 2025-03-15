@@ -1,0 +1,144 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: final
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@database:5432/molecule_db
+      - REDIS_URL=redis://redis:6379/0
+      - API_V1_STR=/api/v1
+      - PROJECT_NAME=MoleculeFlow
+      - SECRET_KEY=${SECRET_KEY}
+      - BACKEND_CORS_ORIGINS=http://localhost:3000,http://frontend:3000
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AI_ENGINE_API_URL=${AI_ENGINE_API_URL}
+      - AI_ENGINE_API_KEY=${AI_ENGINE_API_KEY}
+      - DOCUSIGN_INTEGRATION_KEY=${DOCUSIGN_INTEGRATION_KEY}
+      - DOCUSIGN_USER_ID=${DOCUSIGN_USER_ID}
+      - DOCUSIGN_BASE_URL=${DOCUSIGN_BASE_URL}
+    command: gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app
+    depends_on:
+      - database
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: '2G'
+        reservations:
+          cpus: '0.5'
+          memory: '1G'
+    networks:
+      - backend_network
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: final
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@database:5432/molecule_db
+      - REDIS_URL=redis://redis:6379/0
+      - WORKER_CONCURRENCY=4
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AI_ENGINE_API_URL=${AI_ENGINE_API_URL}
+      - AI_ENGINE_API_KEY=${AI_ENGINE_API_KEY}
+    command: celery -A app.tasks.celery_app worker --loglevel=info
+    volumes:
+      - ./app:/app/app
+    depends_on:
+      - database
+      - redis
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: '4G'
+        reservations:
+          cpus: '1'
+          memory: '2G'
+    networks:
+      - backend_network
+
+  database:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=molecule_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: '2G'
+        reservations:
+          cpus: '0.5'
+          memory: '1G'
+    networks:
+      - backend_network
+
+  redis:
+    image: redis:7.0
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: '1G'
+        reservations:
+          cpus: '0.2'
+          memory: '512M'
+    networks:
+      - backend_network
+
+networks:
+  backend_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
