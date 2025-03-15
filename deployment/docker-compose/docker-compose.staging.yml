@@ -1,0 +1,249 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ../../src/web
+      dockerfile: Dockerfile
+      target: production
+    container_name: molecule-platform-frontend-staging
+    environment:
+      - NODE_ENV=production
+      - VITE_API_BASE_URL=http://nginx:80/api/v1
+      - VITE_APP_TITLE=MoleculeFlow (Staging)
+    restart: always
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: '512M'
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '-', 'http://localhost/']
+      interval: '30s'
+      timeout: '10s'
+      retries: 3
+    networks:
+      - frontend-network-staging
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  backend:
+    build:
+      context: ../../src/backend
+      dockerfile: Dockerfile
+      target: final
+    container_name: molecule-platform-api-staging
+    environment:
+      - ENV=staging
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD:-postgres}@database:5432/molecule_platform_staging
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-staging_secret_key}
+      - API_V1_STR=/api/v1
+      - PROJECT_NAME=Molecular Data Management Platform (Staging)
+      - BACKEND_CORS_ORIGINS=http://localhost,http://nginx
+      - LOG_LEVEL=INFO
+      - AI_ENGINE_API_URL=${AI_ENGINE_API_URL:-http://ai-engine:5000/api}
+    restart: always
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: '2G'
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8000/api/v1/health']
+      interval: '30s'
+      timeout: '10s'
+      retries: 3
+    networks:
+      - frontend-network-staging
+      - backend-network-staging
+    depends_on:
+      - database
+      - redis
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  molecule_service:
+    build:
+      context: ../../src/backend
+      dockerfile: Dockerfile
+      target: final
+    container_name: molecule-platform-molecule-service-staging
+    environment:
+      - ENV=staging
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD:-postgres}@database:5432/molecule_platform_staging
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-staging_secret_key}
+      - SERVICE_TYPE=molecule_processor
+      - LOG_LEVEL=INFO
+      - AI_ENGINE_API_URL=${AI_ENGINE_API_URL:-http://ai-engine:5000/api}
+    command: ['conda', 'run', '-n', 'rdkit-env', 'python', '-m', 'app.services.molecule_service']
+    restart: always
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: '4G'
+    volumes:
+      - molecule-data-staging:/app/data/molecules
+    networks:
+      - backend-network-staging
+    depends_on:
+      - database
+      - redis
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  worker:
+    build:
+      context: ../../src/backend
+      dockerfile: Dockerfile
+      target: final
+    container_name: molecule-platform-worker-staging
+    environment:
+      - ENV=staging
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD:-postgres}@database:5432/molecule_platform_staging
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-staging_secret_key}
+      - SERVICE_TYPE=worker
+      - LOG_LEVEL=INFO
+    command: ['conda', 'run', '-n', 'rdkit-env', 'celery', '-A', 'app.tasks.celery_app', 'worker', '--loglevel=info', '--concurrency=4']
+    restart: always
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: '4G'
+    volumes:
+      - molecule-data-staging:/app/data/molecules
+    networks:
+      - backend-network-staging
+    depends_on:
+      - database
+      - redis
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  database:
+    image: postgres:15.0
+    container_name: molecule-platform-db-staging
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+      - POSTGRES_DB=molecule_platform_staging
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data-staging:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: '4G'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: '10s'
+      timeout: '5s'
+      retries: 5
+    restart: always
+    networks:
+      - backend-network-staging
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  redis:
+    image: redis:7.0
+    container_name: molecule-platform-redis-staging
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data-staging:/data
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: '2G'
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: '10s'
+      timeout: '5s'
+      retries: 5
+    restart: always
+    networks:
+      - backend-network-staging
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  nginx:
+    image: nginx:alpine
+    container_name: molecule-platform-nginx-staging
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - nginx-config-staging:/etc/nginx/conf.d
+      - nginx-logs-staging:/var/log/nginx
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: '512M'
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost/health"]
+      interval: '30s'
+      timeout: '10s'
+      retries: 3
+    restart: always
+    networks:
+      - frontend-network-staging
+      - backend-network-staging
+    depends_on:
+      - frontend
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+volumes:
+  postgres-data-staging:
+    driver: local
+  redis-data-staging:
+    driver: local
+  molecule-data-staging:
+    driver: local
+  document-storage-staging:
+    driver: local
+  nginx-config-staging:
+    driver: local
+  nginx-logs-staging:
+    driver: local
+
+networks:
+  frontend-network-staging:
+    driver: bridge
+  backend-network-staging:
+    driver: bridge
