@@ -1,0 +1,86 @@
+{
+  "family": "moleculeflow-worker",
+  "executionRoleArn": "${aws_iam_role.ecs_execution_role.arn}",
+  "taskRoleArn": "${aws_iam_role.ecs_task_role.arn}",
+  "networkMode": "awsvpc",
+  "containerDefinitions": [
+    {
+      "name": "worker-service",
+      "image": "${aws_ecr_repository.backend_repo.repository_url}:latest",
+      "essential": true,
+      "cpu": 2048,
+      "memory": 8192,
+      "command": ["python", "-m", "app.tasks.worker"],
+      "environment": [
+        {"name": "ENV", "value": "${var.environment}"},
+        {"name": "DEBUG", "value": "0"},
+        {"name": "PROJECT_NAME", "value": "Molecular Data Management and CRO Integration Platform"},
+        {"name": "REDIS_URL", "value": "${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379/0"},
+        {"name": "S3_BUCKET_NAME", "value": "${aws_s3_bucket.molecule_data.bucket}"},
+        {"name": "AWS_REGION", "value": "${var.aws_region}"},
+        {"name": "DATABASE_MAX_CONNECTIONS", "value": "20"},
+        {"name": "DATABASE_POOL_SIZE", "value": "10"},
+        {"name": "DATABASE_POOL_OVERFLOW", "value": "10"},
+        {"name": "WORKER_CONCURRENCY", "value": "8"},
+        {"name": "WORKER_PREFETCH_MULTIPLIER", "value": "4"},
+        {"name": "WORKER_MAX_TASKS_PER_CHILD", "value": "1000"},
+        {"name": "CSV_PROCESSING_BATCH_SIZE", "value": "1000"},
+        {"name": "AI_PREDICTION_BATCH_SIZE", "value": "100"},
+        {"name": "LOG_LEVEL", "value": "INFO"}
+      ],
+      "secrets": [
+        {"name": "SECRET_KEY", "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:SECRET_KEY::"},
+        {"name": "DATABASE_URL", "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:DATABASE_URL::"},
+        {"name": "AWS_ACCESS_KEY_ID", "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:AWS_ACCESS_KEY_ID::"},
+        {"name": "AWS_SECRET_ACCESS_KEY", "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:AWS_SECRET_ACCESS_KEY::"},
+        {"name": "AI_ENGINE_API_URL", "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:AI_ENGINE_API_URL::"},
+        {"name": "AI_ENGINE_API_KEY", "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:AI_ENGINE_API_KEY::"},
+        {"name": "DOCUSIGN_INTEGRATION_KEY", "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:DOCUSIGN_INTEGRATION_KEY::"},
+        {"name": "DOCUSIGN_USER_ID", "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:DOCUSIGN_USER_ID::"},
+        {"name": "DOCUSIGN_BASE_URL", "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:DOCUSIGN_BASE_URL::"},
+        {"name": "SMTP_USER", "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:SMTP_USER::"},
+        {"name": "SMTP_PASSWORD", "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:SMTP_PASSWORD::"},
+        {"name": "SENTRY_DSN", "valueFrom": "${aws_secretsmanager_secret.app_secrets.arn}:SENTRY_DSN::"}
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/moleculeflow-worker",
+          "awslogs-region": "${var.aws_region}",
+          "awslogs-stream-prefix": "worker",
+          "awslogs-create-group": "true"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping -d celery@$HOSTNAME || exit 1"],
+        "interval": 60,
+        "timeout": 10,
+        "retries": 3,
+        "startPeriod": 120
+      },
+      "ulimits": [
+        {
+          "name": "nofile",
+          "softLimit": 65536,
+          "hardLimit": 65536
+        }
+      ]
+    }
+  ],
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "2048",
+  "memory": "8192",
+  "tags": [
+    {"key": "Name", "value": "moleculeflow-worker"},
+    {"key": "Environment", "value": "${var.environment}"},
+    {"key": "Project", "value": "MoleculeFlow"},
+    {"key": "Service", "value": "worker-service"}
+  ],
+  "ephemeralStorage": {
+    "sizeInGiB": 50
+  },
+  "runtimePlatform": {
+    "operatingSystemFamily": "LINUX",
+    "cpuArchitecture": "X86_64"
+  }
+}
