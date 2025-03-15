@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: molecule-platform
+  labels:
+    app: postgres
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: molecule-data-platform
+    app.kubernetes.io/managed-by: kubectl
+    tier: database
+    compliance: regulated
+  annotations:
+    description: "PostgreSQL database service for the Molecular Data Management and CRO Integration Platform"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9187"
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+    targetPort: 5432
+    protocol: TCP
+    name: postgresql
+  selector:
+    app: postgres
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-headless
+  namespace: molecule-platform
+  labels:
+    app: postgres
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: molecule-data-platform
+    app.kubernetes.io/managed-by: kubectl
+    tier: database
+    compliance: regulated
+  annotations:
+    description: "Headless service for PostgreSQL StatefulSet pod identity and DNS-based discovery"
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+  - port: 5432
+    targetPort: 5432
+    protocol: TCP
+    name: postgresql
+  selector:
+    app: postgres
